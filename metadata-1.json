@@ -1,0 +1,5 @@
+{
+  "name": "生图工作流2.0",
+  "description": "A visual workflow builder for Gemini models. Create text and image nodes, connect them to form complex chains, and execute them as a group to generate results.",
+  "requestFramePermissions": []
+}
