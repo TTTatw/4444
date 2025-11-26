@@ -18,7 +18,7 @@ export const HistoryTray: React.FC<Props> = ({ history, onSelect, onClearAll, on
     }
 
     return (
-        <div className="absolute bottom-0 left-0 right-0 z-30 glass-panel border-t border-white/5 animate-in slide-in-from-bottom-10 duration-300">
+        <div className="fixed bottom-0 left-0 right-0 z-30 glass-panel border-t border-white/5 animate-in slide-in-from-bottom-10 duration-300 backdrop-blur-md">
             <div className="flex items-center space-x-3 p-3 overflow-x-auto custom-scrollbar">
                 <div className="flex-shrink-0 pl-1">
                     <button

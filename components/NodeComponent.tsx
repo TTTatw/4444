@@ -13,11 +13,12 @@ interface NodeProps {
     onHeaderMouseDown: (nodeId: string, e: MouseEvent<HTMLElement>) => void;
     onViewContent: (type: NodeType, content: string, name: string) => void;
     isGenerated: boolean;
+    onContextMenu?: (nodeId: string, e: React.MouseEvent) => void;
 }
 
 const UploadIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>);
 
-export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChange, onConnectorMouseDown, onConnectorMouseUp, onMouseDown, onHeaderMouseDown, onViewContent, isGenerated }) => {
+export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChange, onConnectorMouseDown, onConnectorMouseUp, onMouseDown, onHeaderMouseDown, onViewContent, isGenerated, onContextMenu }) => {
     const [isNameEditing, setIsNameEditing] = useState(false);
     const [isContentEditing, setIsContentEditing] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -48,6 +49,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
 
 
     const handleImageUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+        if (node.locked) return;
         const file = e.target.files?.[0];
         if (file) {
             const base64 = await fileToBase64(file);
@@ -57,7 +59,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
     };
 
     const handlePaste = async (e: React.ClipboardEvent) => {
-        if (node.type !== 'image' || isGenerated) return;
+        if (node.locked || node.type !== 'image' || isGenerated) return;
         for (const item of e.clipboardData.items) {
             if (item.type.startsWith('image/')) {
                 const file = item.getAsFile();
@@ -75,6 +77,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
 
     const isImageNode = node.type === 'image';
     const isError = node.status === 'error';
+    const isLocked = node.locked;
 
     const nodeStyle: React.CSSProperties = {
         position: 'absolute',
@@ -108,7 +111,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                             />
                         </div>
                         {/* Overlay to change image for non-generated nodes */}
-                        {!isGenerated && (
+                        {!isGenerated && !isLocked && (
                             <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/image-content:opacity-100 transition-opacity flex flex-col items-center justify-center pointer-events-none">
                                 <button
                                     onClick={(e) => {
@@ -129,7 +132,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
             // Case 2: No image, is a user-input node -> show upload placeholder
             if (!isGenerated) {
                 return (
-                    <div className="w-full h-full flex flex-col items-center justify-center text-center p-4 border border-dashed border-white/10 rounded-xl bg-white/5 hover:bg-white/10 transition-colors cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+                    <div className={`w-full h-full flex flex-col items-center justify-center text-center p-4 border border-dashed border-white/10 rounded-xl bg-white/5 transition-colors ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-white/10'}`} onClick={() => !isLocked && fileInputRef.current?.click()}>
                         <div className="p-3 bg-white/5 rounded-full text-neon-blue mb-3 shadow-[0_0_15px_rgba(0,243,255,0.2)]">
                             <UploadIcon />
                         </div>
@@ -158,9 +161,9 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
         return (
             <div
                 className="w-full h-full bg-black/20 rounded-xl border border-white/5 relative overflow-hidden"
-                onDoubleClick={() => setIsContentEditing(true)}
+                onDoubleClick={() => !isLocked && setIsContentEditing(true)}
             >
-                {isContentEditing ? (
+                {isContentEditing && !isLocked ? (
                     <textarea
                         value={node.content}
                         onChange={(e) => onDataChange(node.id, { content: e.target.value })}
@@ -171,7 +174,9 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                     />
                 ) : (
                     <div className="w-full h-full text-slate-200 p-4 text-sm overflow-y-auto custom-scrollbar font-mono leading-relaxed">
-                        <p className="whitespace-pre-wrap break-words">{node.content || <span className="text-slate-600 italic">{placeholderText}</span>}</p>
+                        <p className="whitespace-pre-wrap break-words">
+                            {node.content || <span className="text-slate-600 italic">{placeholderText}</span>}
+                        </p>
                     </div>
                 )}
             </div>
@@ -189,11 +194,16 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                 onMouseDown(node.id, e);
             }}
             onPaste={handlePaste}
+            onContextMenu={(e) => {
+                if (onContextMenu) {
+                    onContextMenu(node.id, e);
+                }
+            }}
         >
             <div
                 className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-full flex items-center justify-center"
                 onMouseDown={(e) => onHeaderMouseDown(node.id, e)}
-                onDoubleClick={(e) => { e.stopPropagation(); setIsNameEditing(true); }}
+                onDoubleClick={(e) => { if (isLocked) return; e.stopPropagation(); setIsNameEditing(true); }}
             >
                 <div className="relative flex justify-center min-w-[100px]">
                     {isNameEditing ? (
@@ -208,8 +218,9 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                         />
                     ) : (
                         <h3
-                            className="font-bold text-xs text-slate-300 select-none truncate text-center px-3 py-1.5 rounded-lg bg-black/40 backdrop-blur-md border border-white/5 group-hover/node:border-white/20 transition-all cursor-move shadow-lg"
+                            className={`font-bold text-xs text-slate-300 select-none truncate text-center px-3 py-1.5 rounded-lg bg-black/40 backdrop-blur-md border border-white/5 group-hover/node:border-white/20 transition-all ${isLocked ? 'cursor-not-allowed opacity-70' : 'cursor-move'} shadow-lg flex items-center gap-1 justify-center`}
                         >
+                            {isLocked && <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 text-amber-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>}
                             {node.name}
                         </h3>
                     )}
@@ -260,7 +271,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
             </div>
 
             {/* Hidden file input for image nodes that are user-editable */}
-            {isImageNode && !isGenerated && (
+            {isImageNode && !isGenerated && !isLocked && (
                 <input type="file" accept="image/*" ref={fileInputRef} onChange={handleImageUpload} className="hidden" />
             )}
         </div>

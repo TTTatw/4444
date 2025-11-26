@@ -25,17 +25,18 @@ export const Connection: React.FC<ConnectionProps> = ({ id, from, to, nodes, isS
     const toHeight = toNode.height || DEFAULT_NODE_HEIGHT;
 
     // Calculate start and end points with offsets for visual connectors
-    // Output connector is at right edge + 12px
-    const startX = fromNode.position.x + fromWidth + 12;
+    // Output connector at right edge
+    const startX = fromNode.position.x + fromWidth;
     const startY = fromNode.position.y + fromHeight / 2;
 
-    // Input connector is at left edge - 12px
-    const endX = toNode.position.x - 12;
+    // Input connector at left edge
+    const endX = toNode.position.x;
     const endY = toNode.position.y + toHeight / 2;
 
-    const c1X = startX + Math.abs(endX - startX) * 0.5;
+    const curveFactor = 0.35;
+    const c1X = startX + Math.abs(endX - startX) * curveFactor;
     const c1Y = startY;
-    const c2X = endX - Math.abs(endX - startX) * 0.5;
+    const c2X = endX - Math.abs(endX - startX) * curveFactor;
     const c2Y = endY;
 
     const pathData = `M ${startX} ${startY} C ${c1X} ${c1Y}, ${c2X} ${c2Y}, ${endX} ${endY}`;
@@ -61,8 +62,10 @@ export const Connection: React.FC<ConnectionProps> = ({ id, from, to, nodes, isS
             {/* Base path */}
             <path
                 d={pathData}
-                className={`fill-none transition-all duration-300 ${isSelected ? 'stroke-white drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]' : 'stroke-slate-600/50 group-hover/connection:stroke-slate-500'}`}
-                strokeWidth={isSelected ? "3" : "2"}
+                className={`${isSelected ? 'stroke-white drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]' : 'stroke-slate-600/50 group-hover/connection:stroke-slate-500'}`}
+                fill="none"
+                strokeWidth={isSelected ? 3 : 2}
+                strokeLinecap="round"
             />
 
             {/* Active/Gradient path */}

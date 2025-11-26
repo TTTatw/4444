@@ -4,15 +4,51 @@ import type { HistoryItem, SerializedConnection, SerializedNode, WorkflowAsset }
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
+// Some browsers/contexts禁用 localStorage 会导致 “Access to storage is not allowed”。
+// 提供一个安全的 storage 选择：localStorage -> sessionStorage -> 内存。
+const memoryStorage = (() => {
+    const data: Record<string, string> = {};
+    return {
+        getItem: (key: string) => (key in data ? data[key] : null),
+        setItem: (key: string, value: string) => { data[key] = value; },
+        removeItem: (key: string) => { delete data[key]; },
+    } as Storage;
+})();
+
+const pickStorage = (): Storage | undefined => {
+    if (typeof window === 'undefined') return undefined;
+    const tryUse = (s?: Storage) => {
+        if (!s) return undefined;
+        try {
+            const k = '__sb_test__';
+            s.setItem(k, '1');
+            s.removeItem(k);
+            return s;
+        } catch {
+            return undefined;
+        }
+    };
+    return tryUse(window.localStorage) || tryUse(window.sessionStorage) || memoryStorage;
+};
+
 let supabase: SupabaseClient | null = null;
 if (supabaseUrl && supabaseKey) {
-    supabase = createClient(supabaseUrl, supabaseKey);
+    const storage = pickStorage();
+    supabase = createClient(supabaseUrl, supabaseKey, {
+        auth: {
+            storage,
+            autoRefreshToken: true,
+            persistSession: true,
+            detectSessionInUrl: true,
+        },
+    });
 } else {
     console.warn('Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable shared storage.');
 }
 
 const ASSET_TABLE = 'assets';
 const HISTORY_TABLE = 'history_items';
+const USER_TABLE = 'users';
 
 type AssetRow = {
     id: string;
@@ -22,6 +58,8 @@ type AssetRow = {
     nodes: SerializedNode[];
     connections: SerializedConnection[];
     created_at?: string;
+    visibility?: 'public' | 'private';
+    owner_id?: string;
 };
 
 type HistoryRow = {
@@ -31,6 +69,7 @@ type HistoryRow = {
     context: string;
     node_name: string;
     created_at: string;
+    owner_id?: string;
 };
 
 export const isSupabaseConfigured = () => Boolean(supabase);
@@ -45,7 +84,9 @@ export const fetchAssets = async (): Promise<WorkflowAsset[]> => {
         tags: row.tags || [],
         notes: row.notes || '',
         nodes: row.nodes,
-        connections: row.connections
+        connections: row.connections,
+        visibility: row.visibility || 'public',
+        ownerId: row.owner_id
     }));
 };
 
@@ -57,7 +98,9 @@ export const upsertAsset = async (asset: WorkflowAsset) => {
         tags: asset.tags,
         notes: asset.notes,
         nodes: asset.nodes,
-        connections: asset.connections
+        connections: asset.connections,
+        visibility: asset.visibility || 'public',
+        owner_id: asset.ownerId
     });
     if (error) throw error;
 };
@@ -79,10 +122,11 @@ export const fetchHistoryItems = async (): Promise<HistoryItem[]> => {
         prompt: row.prompt,
         context: row.context,
         nodeName: row.node_name,
+        ownerId: row.owner_id,
     }));
 };
 
-export const insertHistoryItem = async (item: HistoryItem) => {
+export const insertHistoryItem = async (item: HistoryItem, ownerId?: string) => {
     if (!supabase) return;
     const { error } = await supabase.from(HISTORY_TABLE).insert({
         id: item.id,
@@ -91,20 +135,56 @@ export const insertHistoryItem = async (item: HistoryItem) => {
         context: item.context,
         node_name: item.nodeName,
         created_at: item.timestamp.toISOString(),
+        owner_id: ownerId ?? item.ownerId,
     });
     if (error) throw error;
 };
 
-export const removeHistoryItem = async (id: string) => {
+export const removeHistoryItem = async (id: string, ownerId?: string) => {
     if (!supabase) return;
-    const { error } = await supabase.from(HISTORY_TABLE).delete().eq('id', id);
+    const query = supabase.from(HISTORY_TABLE).delete().eq('id', id);
+    const { error } = ownerId ? await query.eq('owner_id', ownerId) : await query;
     if (error) throw error;
 };
 
-export const clearHistoryItems = async () => {
+export const clearHistoryItems = async (ownerId?: string) => {
     if (!supabase) return;
-    const { error } = await supabase.from(HISTORY_TABLE).delete();
+    const query = supabase.from(HISTORY_TABLE).delete();
+    const { error } = ownerId ? await query.eq('owner_id', ownerId) : await query;
+    if (error) throw error;
+};
+
+// --- Users (simple auth, stored in Supabase) ---
+type UserRow = {
+    id: string;
+    name: string;
+    password: string;
+    created_at?: string;
+};
+
+export const fetchUsers = async (): Promise<{ name: string; password: string; id: string; }[]> => {
+    if (!supabase) return [];
+    const { data, error } = await supabase.from(USER_TABLE).select('*').order('created_at', { ascending: true });
+    if (error) throw error;
+    return (data || []).map((row: UserRow) => ({
+        id: row.id,
+        name: row.name,
+        password: row.password,
+    }));
+};
+
+export const upsertUser = async (user: { id?: string; name: string; password: string; }) => {
+    if (!supabase) return;
+    const payload = { id: user.id, name: user.name, password: user.password };
+    const { error } = await supabase.from(USER_TABLE).upsert(payload);
+    if (error) throw error;
+};
+
+export const deleteUser = async (id: string) => {
+    if (!supabase) return;
+    const { error } = await supabase.from(USER_TABLE).delete().eq('id', id);
     if (error) throw error;
 };
 
 export const getSupabaseClient = () => supabase;
+export const supabaseAuth = () => supabase?.auth;

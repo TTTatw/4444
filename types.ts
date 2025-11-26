@@ -25,6 +25,7 @@ export interface Node {
   width?: number;
   height?: number;
   selectedModel?: string;
+  locked?: boolean; // read-only if true (for private workflows not owned)
 }
 
 export interface Connection {
@@ -63,6 +64,7 @@ export interface HistoryItem {
   prompt: string;
   context: string;
   nodeName: string;
+  ownerId?: string;
 }
 
 // Specific types for serialized (saved) workflow data
@@ -91,4 +93,6 @@ export interface WorkflowAsset {
     notes: string;
     nodes: SerializedNode[]; 
     connections: SerializedConnection[];
+    visibility?: 'public' | 'private';
+    ownerId?: string;
 }

@@ -1,5 +1,7 @@
 ﻿
 import React, { useState, useCallback, useRef, MouseEvent, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { UIOverlay } from './components/UIOverlay';
 import { NodeComponent } from './components/NodeComponent';
 import { ContextMenu } from './components/ContextMenu';
 import { Connection } from './components/Connection';
@@ -14,7 +16,7 @@ import { SaveAssetModal } from './components/SaveAssetModal';
 import { AssetLibrary } from './components/AssetLibrary';
 import type { Node, Connection as ConnectionType, Point, ContextMenu as ContextMenuType, Group, NodeType, HistoryItem, WorkflowAsset, SerializedNode, SerializedConnection, NodeStatus } from './types';
 import { runNode } from './services/geminiService';
-import { isSupabaseConfigured, fetchAssets, upsertAsset, deleteAsset, fetchHistoryItems, insertHistoryItem, removeHistoryItem, clearHistoryItems } from './services/storageService';
+import { isSupabaseConfigured, fetchAssets, upsertAsset, deleteAsset, fetchHistoryItems, insertHistoryItem, removeHistoryItem, clearHistoryItems, fetchUsers, upsertUser, deleteUser, supabaseAuth } from './services/storageService';
 import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH } from './constants';
 
 const TextIcon = () => (
@@ -46,6 +48,13 @@ const App: React.FC = () => {
     const [apiKey, setApiKey] = useState<string | null>(null);
     const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
     const [apiKeyDraft, setApiKeyDraft] = useState('');
+    const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+    const [loginName, setLoginName] = useState('');
+    const [loginPassword, setLoginPassword] = useState('');
+    const [authorizedUsers, setAuthorizedUsers] = useState<{ id?: string; name: string; password: string; }[]>([]);
+    const [currentUser, setCurrentUser] = useState<{ role: 'guest' | 'admin' | 'user'; name: string; id?: string }>({ role: 'guest', name: 'Guest' });
+    const [newAuthorizedName, setNewAuthorizedName] = useState('');
+    const [newAuthorizedPassword, setNewAuthorizedPassword] = useState('');
 
     // Undo/Redo State
     const [past, setPast] = useState<CanvasState[]>([]);
@@ -82,6 +91,9 @@ const App: React.FC = () => {
     // Modals & Trays State
     const [viewerContent, setViewerContent] = useState<{ type: NodeType, content: string, name: string } | null>(null);
     const [selectedHistoryItem, setSelectedHistoryItem] = useState<HistoryItem | null>(null);
+    const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+    const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
+    const [historyModalSelection, setHistoryModalSelection] = useState<Set<string>>(new Set());
     const [isAssetLibraryOpen, setIsAssetLibraryOpen] = useState(false);
     const [isSaveAssetModalOpen, setIsSaveAssetModalOpen] = useState(false);
     const [groupToSave, setGroupToSave] = useState<Group | null>(null);
@@ -94,6 +106,45 @@ const App: React.FC = () => {
     const dragStateRef = useRef<{ id: string; offset: Point } | null>(null);
     const onMouseMoveRef = useRef<((e: globalThis.MouseEvent) => void) | null>(null);
     const onMouseUpRef = useRef<((e: globalThis.MouseEvent) => void) | null>(null);
+    const groupDragRef = useRef<{ id: string; offset: { x: number; y: number } } | null>(null);
+
+    const clampZoom = (z: number) => Math.min(Math.max(0.2, z), 2);
+
+    // Prevent browser-level zoom (Ctrl + wheel / Ctrl + +/-) so only canvas zoom applies
+    useEffect(() => {
+        const preventBrowserZoom = (e: WheelEvent) => {
+            if (e.ctrlKey) {
+                e.preventDefault();
+            }
+        };
+        const preventKeyZoom = (e: KeyboardEvent) => {
+            if (e.ctrlKey && ['=', '+', '-', '0'].includes(e.key)) {
+                e.preventDefault();
+            }
+        };
+        window.addEventListener('wheel', preventBrowserZoom, { passive: false });
+        window.addEventListener('keydown', preventKeyZoom, { passive: false });
+        return () => {
+            window.removeEventListener('wheel', preventBrowserZoom);
+            window.removeEventListener('keydown', preventKeyZoom);
+        };
+    }, []);
+
+    const zoomAroundPoint = useCallback((newZoom: number, pointer?: { x: number; y: number }) => {
+        const rect = canvasRef.current?.getBoundingClientRect();
+        const center = pointer || (rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : { x: 0, y: 0 });
+        const canvasPos = { x: center.x - (rect?.left || 0), y: center.y - (rect?.top || 0) };
+        setZoom(prevZoom => {
+            const targetZoom = clampZoom(newZoom);
+            const worldX = (canvasPos.x - pan.x) / prevZoom;
+            const worldY = (canvasPos.y - pan.y) / prevZoom;
+            setPan({
+                x: canvasPos.x - worldX * targetZoom,
+                y: canvasPos.y - worldY * targetZoom,
+            });
+            return targetZoom;
+        });
+    }, [pan.x, pan.y]);
 
     // Update refs when state changes
     useEffect(() => { nodesRef.current = nodes; }, [nodes]);
@@ -110,6 +161,14 @@ const App: React.FC = () => {
         if (selectedNodes.filter(n => !n.groupId).length > 1) return 'node';
         return 'none';
     }, [selectedGroups, selectedNodes]);
+    const visibleAssets = useMemo(
+        () => assets.filter(a => a.visibility !== 'private' || currentUser.role === 'admin' || a.ownerId === currentUser.id),
+        [assets, currentUser]
+    );
+    const visibleHistory = useMemo(
+        () => history.filter(item => !item.ownerId || currentUser.role === 'admin' || item.ownerId === currentUser.id),
+        [history, currentUser]
+    );
 
     // --- Undo/Redo System ---
     const recordHistory = useCallback(() => {
@@ -303,6 +362,19 @@ const App: React.FC = () => {
                 width: Math.abs(start.x - end.x),
                 height: Math.abs(start.y - end.y),
             });
+        } else if (groupDragRef.current) {
+            const drag = groupDragRef.current;
+            const group = groupsRef.current.find(g => g.id === drag.id);
+            if (!group) return;
+            const newX = (e.clientX - pan.x - drag.offset.x) / zoom;
+            const newY = (e.clientY - pan.y - drag.offset.y) / zoom;
+            const deltaX = newX - group.position.x;
+            const deltaY = newY - group.position.y;
+            if (Math.abs(deltaX) > 0 || Math.abs(deltaY) > 0) {
+                interactionState.current.hasDragged = true;
+                setGroups(gs => gs.map(g => g.id === drag.id ? { ...g, position: { x: newX, y: newY } } : g));
+                setNodes(ns => ns.map(n => group.nodeIds.includes(n.id) ? { ...n, position: { x: n.position.x + deltaX, y: n.position.y + deltaY } } : n));
+            }
         } else if (dragStateRef.current) {
             interactionState.current.hasDragged = true;
             if (!isDraggingNode) setIsDraggingNode(true);
@@ -371,17 +443,19 @@ const App: React.FC = () => {
         } else if (drawingConnection) {
             const startNodeId = drawingConnection.from || drawingConnection.to;
             if (!startNodeId) return;
-            const startNodeElem = document.getElementById(startNodeId);
-            if (!startNodeElem) return;
+            const startNode = nodesRef.current.find(n => n.id === startNodeId);
+            if (!startNode) return;
+            const startW = startNode.width || DEFAULT_NODE_WIDTH;
+            const startH = startNode.height || DEFAULT_NODE_HEIGHT;
 
-            const rect = startNodeElem.getBoundingClientRect();
-            const endPoint = { x: e.clientX, y: e.clientY };
-            let startPoint;
-            if (drawingConnection.from) { // Forward
-                startPoint = { x: rect.right, y: rect.top + rect.height / 2 };
+            const startPoint = drawingConnection.from
+                ? { x: startNode.position.x + startW + 12, y: startNode.position.y + startH / 2 }
+                : { x: startNode.position.x - 12, y: startNode.position.y + startH / 2 };
+
+            const endPoint = { x: (e.clientX - pan.x) / zoom, y: (e.clientY - pan.y) / zoom };
+            if (drawingConnection.from) {
                 setPreviewConnection({ start: startPoint, end: endPoint });
-            } else { // Reverse
-                startPoint = { x: rect.left, y: rect.top + rect.height / 2 };
+            } else {
                 setPreviewConnection({ start: endPoint, end: startPoint });
             }
         }
@@ -443,6 +517,7 @@ const App: React.FC = () => {
         interactionState.current.isPanning = false;
         interactionState.current.isSelecting = false;
         dragStateRef.current = null;
+        groupDragRef.current = null;
         setDrawingConnection(null);
         setPreviewConnection(null);
         setSelectionBox(null);
@@ -472,6 +547,15 @@ const App: React.FC = () => {
         if (contextMenu) closeContextMenu();
 
         const isCanvasClick = (e.target as HTMLElement).closest('[data-id="canvas-bg"]');
+
+        if (e.button === 2) { // Right click panning, allow anywhere
+            interactionState.current.isPanning = true;
+            interactionState.current.startPanPoint = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+            interactionState.current.dragStart = { x: e.clientX, y: e.clientY };
+            startGlobalInteraction();
+            return;
+        }
+
         if (!isCanvasClick) return;
 
         if (e.button === 0) { // Left click
@@ -480,10 +564,6 @@ const App: React.FC = () => {
             interactionState.current.dragStart = { x: e.clientX, y: e.clientY };
             selectionStartPointRef.current = { x: e.clientX, y: e.clientY };
             setSelectionBox({ x: e.clientX, y: e.clientY, width: 0, height: 0 });
-        } else if (e.button === 2) { // Right click
-            interactionState.current.isPanning = true;
-            interactionState.current.startPanPoint = { x: e.clientX - pan.x, y: e.clientY - pan.y };
-            interactionState.current.dragStart = { x: e.clientX, y: e.clientY };
         }
         startGlobalInteraction();
     };
@@ -551,6 +631,89 @@ const App: React.FC = () => {
         e.preventDefault();
         e.stopPropagation();
         startGlobalInteraction();
+    };
+
+    const handleNodeContextMenu = (nodeId: string, e: MouseEvent) => {
+        e.preventDefault();
+        const position = { x: e.clientX, y: e.clientY };
+        setContextMenu({
+            position,
+            title: '节点',
+            options: [
+                { label: '保存为预设', action: () => { handleSaveSelectionAsPreset(nodeId); closeContextMenu(); } },
+            ],
+            onClose: closeContextMenu,
+        });
+    };
+
+    const handleGroupMouseDown = (groupId: string, e: MouseEvent) => {
+        if (e.button === 2) return;
+        if (e.ctrlKey) {
+            setGroups(gs => gs.map(g => g.id === groupId ? { ...g, selected: !g.selected } : g));
+        } else {
+            setGroups(gs => gs.map(g => ({ ...g, selected: g.id === groupId })));
+            setNodes(ns => ns.map(n => ({ ...n, selected: false })));
+            setSelectedConnectionId(null);
+        }
+
+        const group = groupsRef.current.find(g => g.id === groupId);
+        if (group) {
+            groupDragRef.current = {
+                id: groupId,
+                offset: {
+                    x: e.clientX - (group.position.x * zoom + pan.x),
+                    y: e.clientY - (group.position.y * zoom + pan.y),
+                }
+            };
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        startGlobalInteraction();
+    };
+
+    const handleSaveSelectionAsPreset = (nodeId?: string) => {
+        const selectedIds = new Set(nodes.filter(n => n.selected).map(n => n.id));
+        if (nodeId && !selectedIds.has(nodeId)) {
+            selectedIds.clear();
+            selectedIds.add(nodeId);
+        }
+        if (selectedIds.size === 0) return;
+
+        const selectedNodes = nodes.filter(n => selectedIds.has(n.id));
+        const selectedConnections = connections.filter(c => selectedIds.has(c.from) && selectedIds.has(c.to));
+        const minX = Math.min(...selectedNodes.map(n => n.position.x));
+        const minY = Math.min(...selectedNodes.map(n => n.position.y));
+
+        const serializableNodes: SerializedNode[] = selectedNodes.map((node) => ({
+            id: node.id,
+            name: node.name,
+            type: node.type,
+            position: { x: node.position.x - minX, y: node.position.y - minY },
+            content: node.content,
+            instruction: node.instruction,
+            inputImage: node.inputImage,
+            width: node.width,
+            height: node.height,
+            selectedModel: node.selectedModel,
+        }));
+        const serializableConnections: SerializedConnection[] = selectedConnections.map(({ from, to }) => ({ fromNode: from, toNode: to }));
+
+        const newAsset: WorkflowAsset = {
+            id: `preset-${Date.now()}`,
+            name: `Preset ${new Date().toLocaleTimeString()}`,
+            tags: ['preset'],
+            notes: 'Saved from selection',
+            nodes: serializableNodes,
+            connections: serializableConnections,
+            visibility: 'private',
+            ownerId: currentUser.id,
+        };
+        saveAssets([...assets, newAsset]);
+        if (supabaseEnabled) {
+            upsertAsset(newAsset).catch(err => console.error("Supabase asset sync failed:", err));
+        }
+        setToast('已保存到预设');
+        setTimeout(() => setToast(null), 2000);
     };
 
     const handleConnectorMouseDown = (e: React.MouseEvent, nodeId: string, type: 'input' | 'output') => {
@@ -689,10 +852,10 @@ const App: React.FC = () => {
                     height: undefined 
                 });
                 const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
-                const historyItem: HistoryItem = { id: `hist-${Date.now()}`, timestamp: new Date(), image: result.content, prompt: instructionToUse, context, nodeName: nodeToExecute.name };
+                const historyItem: HistoryItem = { id: `hist-${Date.now()}`, timestamp: new Date(), image: result.content, prompt: instructionToUse, context, nodeName: nodeToExecute.name, ownerId: currentUser.id };
                 setHistory(h => [historyItem, ...h]);
                 if (supabaseEnabled) {
-                    insertHistoryItem(historyItem).catch(err => console.error("Supabase history insert failed:", err));
+                    insertHistoryItem(historyItem, currentUser.id).catch(err => console.error("Supabase history insert failed:", err));
                 }
             } else {
                 const update: Partial<Node> = { status: 'success', content: result.content };
@@ -866,7 +1029,8 @@ const App: React.FC = () => {
                             image: result.content, 
                             prompt: currentNodeData.instruction, 
                             context, 
-                            nodeName: currentNodeData.name 
+                            nodeName: currentNodeData.name,
+                            ownerId: currentUser.id,
                         };
                         newHistoryItems.push(histItem);
                     } else {
@@ -915,7 +1079,7 @@ const App: React.FC = () => {
                 if (newHistoryItems.length > 0) {
                     setHistory(h => [...newHistoryItems.filter(item => !h.some(existing => existing.id === item.id)).reverse(), ...h]);
                     if (supabaseEnabled) {
-                        newHistoryItems.forEach(item => insertHistoryItem(item).catch(err => console.error("Supabase history insert failed:", err)));
+                        newHistoryItems.forEach(item => insertHistoryItem({ ...item, ownerId: currentUser.id }, currentUser.id).catch(err => console.error("Supabase history insert failed:", err)));
                     }
                     newHistoryItems.length = 0; 
                 }
@@ -934,6 +1098,7 @@ const App: React.FC = () => {
         name: "Default multimodal image flow",
         tags: ['default', 'multimodal', 'image'],
         notes: "Sample workflow combining text and image inputs to produce a new image.",
+        visibility: 'public',
         nodes: [
             { id: 'default-image-1', name: 'Image 1', type: 'image', position: { x: 0, y: 0 }, content: '', instruction: '', inputImage: null, selectedModel: 'gemini-2.5-flash-image' },
             { id: 'default-text-1', name: 'Text 1', type: 'text', position: { x: 0, y: 250 }, content: '', instruction: '', inputImage: null, selectedModel: 'gemini-3-pro-preview' },
@@ -946,37 +1111,43 @@ const App: React.FC = () => {
     }), [])
 
     const loadAssetsAndHistory = useCallback(async () => {
-        if (supabaseEnabled) {
+        // 未登录（guest）且启用了 Supabase 时，不要去请求远端，避免 401/403
+        const canUseSupabase = supabaseEnabled && currentUser.role !== 'guest';
+        if (canUseSupabase) {
             try {
-                const [remoteAssets, remoteHistory] = await Promise.all([fetchAssets(), fetchHistoryItems()])
-                if (remoteAssets.length > 0) {
-                    setAssets(remoteAssets)
+                const [remoteAssets, remoteHistory] = await Promise.all([fetchAssets(), fetchHistoryItems()]);
+                const normalizedAssets = (remoteAssets || []).map(a => ({ ...a, visibility: a.visibility || 'public' as const }));
+                if (normalizedAssets.length > 0) {
+                    setAssets(normalizedAssets);
                 } else {
-                    setAssets([defaultAsset])
-                    await upsertAsset(defaultAsset)
+                    const ownedDefault = { ...defaultAsset, ownerId: currentUser.id };
+                    setAssets([ownedDefault]);
+                    await upsertAsset(ownedDefault);
                 }
                 if (remoteHistory.length > 0) {
-                    setHistory(remoteHistory)
+                    const filteredHistory = remoteHistory.filter(item => !item.ownerId || currentUser.role === 'admin' || item.ownerId === currentUser.id);
+                    setHistory(filteredHistory);
                 }
-                return
+                return;
             } catch (error) {
-                console.error("Failed to load data from Supabase, falling back to local storage:", error)
+                console.error("Failed to load data from Supabase, falling back to local storage:", error);
             }
         }
 
         try {
             const savedAssets = localStorage.getItem('gemini-canvas-assets')
             if (savedAssets) {
-                setAssets(JSON.parse(savedAssets))
+                const parsed: WorkflowAsset[] = JSON.parse(savedAssets);
+                setAssets(parsed.map(a => ({ ...a, visibility: a.visibility || 'public' as const })));
             } else {
-                const assetsToSave = [defaultAsset]
-                setAssets(assetsToSave)
-                localStorage.setItem('gemini-canvas-assets', JSON.stringify(assetsToSave))
+                const assetsToSave = [defaultAsset];
+                setAssets(assetsToSave);
+                localStorage.setItem('gemini-canvas-assets', JSON.stringify(assetsToSave));
             }
         } catch (error) {
-            console.error("Failed to load assets from local storage:", error)
+            console.error("Failed to load assets from local storage:", error);
         }
-    }, [supabaseEnabled, defaultAsset])
+    }, [supabaseEnabled, defaultAsset, currentUser])
 
     useEffect(() => {
         loadAssetsAndHistory()
@@ -995,16 +1166,72 @@ const App: React.FC = () => {
         }
     }, [])
 
+    // Load auth state and authorized users (with Supabase fallback)
+    const deriveRole = useCallback((email?: string, metadataRole?: string) => {
+        const adminList = (((import.meta as any).env?.VITE_ADMIN_EMAILS) || '')
+            .split(',')
+            .map((s: string) => s.trim().toLowerCase())
+            .filter(Boolean);
+        const em = (email || '').trim().toLowerCase();
+        const isAdmin = metadataRole === 'admin' || adminList.includes(em);
+        console.log('[auth] email=', em, 'metadataRole=', metadataRole, 'envAdmins=', adminList, 'isAdmin=', isAdmin);
+        return isAdmin ? 'admin' : 'user';
+    }, []);
+
+    useEffect(() => {
+        const auth = supabaseAuth();
+        if (!auth) return;
+        auth.getSession().then(({ data }) => {
+            const session = data.session;
+            if (session?.user) {
+                const role = deriveRole(session.user.email || '', (session.user.user_metadata as any)?.role);
+                setCurrentUser({ role, name: session.user.email || 'User', id: session.user.id });
+            }
+        });
+        const { data: sub } = auth.onAuthStateChange((_event, session) => {
+            if (session?.user) {
+                const role = deriveRole(session.user.email || '', (session.user.user_metadata as any)?.role);
+                setCurrentUser({ role, name: session.user.email || 'User', id: session.user.id });
+            } else {
+                setCurrentUser({ role: 'guest', name: 'Guest' });
+            }
+        });
+        return () => { sub?.subscription.unsubscribe(); };
+    }, [deriveRole]);
+
+    useEffect(() => {
+        const loadUsersForAdmin = async () => {
+            if (!supabaseEnabled || currentUser.role !== 'admin') return;
+            try {
+                const remoteUsers = await fetchUsers();
+                setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.name, password: u.password })));
+            } catch (error) {
+                console.error("Failed to load users from Supabase:", error);
+            }
+        };
+        loadUsersForAdmin();
+    }, [supabaseEnabled, currentUser]);
+
     const saveAssets = useCallback(async (updatedAssets: WorkflowAsset[]) => {
-        setAssets(updatedAssets)
+        const normalized = updatedAssets.map(a => ({
+            ...a,
+            visibility: a.visibility || 'public',
+            ownerId: a.ownerId || currentUser.id,
+        }));
+        setAssets(normalized);
         if (supabaseEnabled) {
-            await Promise.all(updatedAssets.map(asset => upsertAsset(asset).catch(err => console.error("Supabase asset sync failed:", err))))
+            await Promise.all(normalized.map(asset => upsertAsset(asset).catch(err => console.error("Supabase asset sync failed:", err))));
         } else {
-            localStorage.setItem('gemini-canvas-assets', JSON.stringify(updatedAssets))
+            localStorage.setItem('gemini-canvas-assets', JSON.stringify(normalized));
         }
-    }, [supabaseEnabled])
-    const handleSaveAsset = (details: { name: string, tags: string[], notes: string }) => {
+    }, [supabaseEnabled, currentUser.id]);
+
+    const handleSaveAsset = (details: { name: string, tags: string[], notes: string, visibility: 'public' | 'private' }) => {
         if (!groupToSave) return;
+        if (currentUser.role === 'guest') {
+            alert('请先登录再保存工作流。');
+            return;
+        }
 
         const groupNodeIds = new Set(groupToSave.nodeIds);
         const workflowNodes = nodes.filter(n => groupNodeIds.has(n.id));
@@ -1040,8 +1267,12 @@ const App: React.FC = () => {
         const serializableConnections: SerializedConnection[] = workflowConnections.map(({ from, to }) => ({ fromNode: from, toNode: to }));
 
         const newAsset: WorkflowAsset = {
-            id: `asset-${Date.now()}`, ...details,
-            nodes: serializableNodes, connections: serializableConnections,
+            id: `asset-${Date.now()}`,
+            ...details,
+            nodes: serializableNodes,
+            connections: serializableConnections,
+            visibility: details.visibility || 'public',
+            ownerId: currentUser.id,
         };
 
         saveAssets([...assets, newAsset]);
@@ -1052,6 +1283,11 @@ const App: React.FC = () => {
     };
 
     const handleDeleteAsset = (assetId: string) => {
+        const target = assets.find(a => a.id === assetId);
+        if (target && target.visibility === 'private' && target.ownerId && currentUser.role !== 'admin' && target.ownerId !== currentUser.id) {
+            alert('无权删除其他用户的私密工作流');
+            return;
+        }
         const remaining = assets.filter(a => a.id !== assetId);
         saveAssets(remaining);
         if (supabaseEnabled) {
@@ -1059,11 +1295,16 @@ const App: React.FC = () => {
         }
     };
 
-    const addWorkflowToCanvas = (workflow: { nodes: SerializedNode[], connections: SerializedConnection[] }) => {
+    const addWorkflowToCanvas = (workflow: WorkflowAsset | { nodes: SerializedNode[], connections: SerializedConnection[], visibility?: 'public' | 'private', ownerId?: string }) => {
         // We don't strictly record history here as it's a big operation, 
         // but usually it's good to have an undo point.
         recordHistory();
         deselectAll();
+
+        const visibility = (workflow as WorkflowAsset).visibility || 'public';
+        const ownerId = (workflow as WorkflowAsset).ownerId;
+        const shouldLock = visibility === 'private' && ownerId && currentUser.role !== 'admin' && ownerId !== currentUser.id;
+        const isPreset = Array.isArray((workflow as WorkflowAsset).tags) && (workflow as WorkflowAsset).tags!.includes('preset');
 
         // 1. Calculate new workflow bounds
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -1110,14 +1351,15 @@ const App: React.FC = () => {
             const newId = `${nodeData.type}-${Date.now()}-${Math.random()}`;
             idMap.set(oldId, newId);
             return {
-                ...nodeData, id: newId, status: 'idle', selected: true,
+                ...nodeData, id: newId, status: 'idle', selected: false,
                 width: nodeData.width || (nodeData.type === 'image' ? DEFAULT_NODE_WIDTH : undefined),
                 height: nodeData.height || (nodeData.type === 'image' ? DEFAULT_NODE_HEIGHT : undefined),
                 position: {
                     x: nodeData.position.x - minX + targetPos.x,
                     y: nodeData.position.y - minY + targetPos.y,
                 },
-                selectedModel: nodeData.selectedModel
+                selectedModel: nodeData.selectedModel,
+                locked: shouldLock,
             };
         });
         const loadedConnections: ConnectionType[] = workflow.connections.map((connData: SerializedConnection) => {
@@ -1128,6 +1370,28 @@ const App: React.FC = () => {
 
         setNodes(n => [...n, ...loadedNodes]);
         setConnections(c => [...c, ...loadedConnections]);
+
+        // Auto-group the imported workflow for easier selection
+        if (!isPreset) {
+            const groupId = `group-${Date.now()}`;
+            const namesafe = (workflow as WorkflowAsset).name || '导入工作流';
+            const bounds = {
+                left: Math.min(...loadedNodes.map(n => n.position.x)),
+                top: Math.min(...loadedNodes.map(n => n.position.y)),
+                right: Math.max(...loadedNodes.map(n => n.position.x + (n.width || DEFAULT_NODE_WIDTH))),
+                bottom: Math.max(...loadedNodes.map(n => n.position.y + (n.height || DEFAULT_NODE_HEIGHT))),
+            };
+            const GROUP_PADDING = 60;
+            const size = { width: bounds.right - bounds.left + GROUP_PADDING * 2, height: bounds.bottom - bounds.top + GROUP_PADDING * 2 };
+            setGroups(g => [...g, {
+                id: groupId,
+                name: namesafe,
+                nodeIds: loadedNodes.map(n => n.id),
+                position: { x: bounds.left - GROUP_PADDING, y: bounds.top - GROUP_PADDING },
+                size,
+                selected: true,
+            }]);
+        }
     };
 
     // --- Keyboard Shortcuts (Copy/Paste/Delete/Undo) ---
@@ -1279,11 +1543,11 @@ const App: React.FC = () => {
     }, [selectedNodes, selectedGroups, pan, zoom]);
 
     const handleClearHistory = useCallback(() => {
-        setHistory([]);
+        setHistory(h => h.filter(item => item.ownerId && item.ownerId !== currentUser.id && currentUser.role !== 'admin'));
         if (supabaseEnabled) {
-            clearHistoryItems().catch(err => console.error("Supabase clear history failed:", err));
+            clearHistoryItems(currentUser.role === 'admin' ? undefined : currentUser.id).catch(err => console.error("Supabase clear history failed:", err));
         }
-    }, [supabaseEnabled]);
+    }, [supabaseEnabled, currentUser]);
 
     const handleDeleteHistoryItem = useCallback((id: string) => {
         setHistory(h => h.filter(item => item.id !== id));
@@ -1294,9 +1558,17 @@ const App: React.FC = () => {
             return currentItem;
         });
         if (supabaseEnabled) {
-            removeHistoryItem(id).catch(err => console.error("Supabase delete history failed:", err));
+            removeHistoryItem(id, currentUser.role === 'admin' ? undefined : currentUser.id).catch(err => console.error("Supabase delete history failed:", err));
         }
-    }, [supabaseEnabled]);
+    }, [supabaseEnabled, currentUser]);
+
+    const handleBulkDeleteHistory = useCallback((ids: string[]) => {
+        setHistory(h => h.filter(item => !ids.includes(item.id)));
+        setHistoryModalSelection(new Set());
+        if (supabaseEnabled) {
+            ids.forEach(id => removeHistoryItem(id, currentUser.role === 'admin' ? undefined : currentUser.id).catch(err => console.error("Supabase delete history failed:", err)));
+        }
+    }, [supabaseEnabled, currentUser]);
 
     // API Key modal handlers
     const handleSaveApiKey = () => {
@@ -1323,14 +1595,134 @@ const App: React.FC = () => {
         }
     };
 
+    // Auth handlers
+    const persistAuthorizedUsers = (users: { id?: string; name: string; password: string; }[]) => {
+        setAuthorizedUsers(users);
+        try {
+            localStorage.setItem('authorized-users', JSON.stringify(users));
+        } catch (error) {
+            console.error("Failed to save authorized users:", error);
+        }
+    };
+
+    const handleLogin = async (register = false) => {
+        const auth = supabaseAuth();
+        if (!auth) return;
+        try {
+            if (register) {
+                const { error } = await auth.signUp({ email: loginName, password: loginPassword });
+                if (error) throw error;
+                setToast('注册成功，请登录');
+                setTimeout(() => setToast(null), 2000);
+                return;
+            }
+            const { data, error } = await auth.signInWithPassword({ email: loginName, password: loginPassword });
+            if (error || !data.session) throw error || new Error('No session');
+            const role = (data.session.user.user_metadata as any)?.role === 'admin' ? 'admin' : 'user';
+            setCurrentUser({ role, name: data.session.user.email || 'User', id: data.session.user.id });
+            setIsAuthModalOpen(false);
+        } catch (error) {
+            alert("登录失败，请检查邮箱/密码");
+        }
+    };
+
+    const handleLogout = async () => {
+        const auth = supabaseAuth();
+        if (auth) await auth.signOut();
+        setCurrentUser({ role: 'guest', name: 'Guest' });
+        setLoginName('');
+        setLoginPassword('');
+        setNodes([]);
+        setConnections([]);
+        setGroups([]);
+        setHistory([]);
+    };
+
+    const handleAddAuthorizedUser = async () => {
+        if (!supabaseEnabled) return;
+        if (!newAuthorizedName || !newAuthorizedPassword) return;
+        try {
+            const auth = supabaseAuth();
+            if (auth) {
+                const { error } = await auth.signUp({ email: newAuthorizedName, password: newAuthorizedPassword });
+                if (error) throw error;
+            }
+            await upsertUser({ name: newAuthorizedName, password: '' });
+            const remoteUsers = await fetchUsers();
+            setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.name, password: u.password })));
+            setNewAuthorizedName('');
+            setNewAuthorizedPassword('');
+            setToast('已添加授权账号');
+            setTimeout(() => setToast(null), 2000);
+        } catch (error) {
+            alert('添加授权账号失败，请检查邮箱是否已存在');
+        }
+    };
+    const handleRemoveAuthorizedUser = async (name: string) => {
+        if (!supabaseEnabled) return;
+        try {
+            const target = authorizedUsers.find(u => u.name === name);
+            if (target?.id) await deleteUser(target.id);
+            const remoteUsers = await fetchUsers();
+            setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.name, password: u.password })));
+        } catch (error) {
+            console.error("Failed to delete user:", error);
+        }
+    };
+
+    if (currentUser.role === 'guest') {
+        return (
+            <div className="w-screen h-screen bg-[#0f1118] flex items-center justify-center text-slate-200">
+                <div className="bg-[#141925] border border-slate-700 rounded-3xl shadow-2xl w-full max-w-3xl p-10 space-y-8">
+                    <div>
+                        <h1 className="text-2xl font-bold text-white">登录到工作流画布</h1>
+                        <p className="text-sm text-slate-400 mt-2">使用您的邮箱和密码登录。管理员可以在登录后添加授权账号。</p>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                        <div className="space-y-3">
+                            <input
+                                type="email"
+                                value={loginName}
+                                onChange={e => setLoginName(e.target.value)}
+                                placeholder="邮箱"
+                                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                            <input
+                                type="password"
+                                value={loginPassword}
+                                onChange={e => setLoginPassword(e.target.value)}
+                                placeholder="密码"
+                                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                            <div className="flex items-center gap-3">
+                                <button onClick={() => handleLogin()} className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 text-sm">登录</button>
+                                <button onClick={() => handleLogin(true)} className="px-4 py-2 rounded-lg bg-slate-600 text-white hover:bg-slate-500 text-sm">注册</button>
+                            </div>
+                        </div>
+                        <div className="space-y-3 bg-slate-900/60 rounded-2xl border border-slate-700 p-4">
+                            <h3 className="text-sm font-semibold text-slate-200">提示</h3>
+                            <ul className="text-sm text-slate-400 space-y-2 list-disc list-inside">
+                                <li>登录后才能进入画布和节点操作</li>
+                                <li>管理员邮箱（env: VITE_ADMIN_EMAILS 或 Supabase metadata role=admin）可管理 API 与授权账号</li>
+                                <li>忘记密码请在 Supabase 控制台重置或使用注册创建新账号</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div
             className="w-screen h-screen overflow-hidden cursor-default text-slate-200 font-sans select-none"
             onWheel={(e) => {
                 if (e.ctrlKey) {
                     e.preventDefault();
+                    const rect = canvasRef.current?.getBoundingClientRect();
+                    const pointer = { x: e.clientX - (rect?.left || 0), y: e.clientY - (rect?.top || 0) };
                     const scale = e.deltaY * -0.001;
-                    setZoom(z => Math.min(Math.max(0.2, z + scale), 2));
+                    zoomAroundPoint(zoom + scale, { x: pointer.x + (rect?.left || 0), y: pointer.y + (rect?.top || 0) });
                 }
             }}
         >
@@ -1341,17 +1733,19 @@ const App: React.FC = () => {
                 onMouseDown={handleCanvasMouseDown}
                 onContextMenu={handleCanvasContextMenu}
                 style={{
+                    backgroundColor: '#0f1118',
                     backgroundSize: `${40 * zoom}px ${40 * zoom}px`,
-                    backgroundImage: 'radial-gradient(circle, rgba(255, 255, 255, 0.08) 1px, rgba(0, 0, 0, 0) 1px)',
+                    backgroundImage: 'radial-gradient(circle, rgba(255, 255, 255, 0.08) 1px, transparent 1px)',
                     backgroundPosition: `${pan.x}px ${pan.y}px`,
                 }}
             />
 
-            {toast && (
-                <div className="fixed top-8 left-1/2 -translate-x-1/2 glass-panel text-white px-6 py-3 rounded-full shadow-[0_0_30px_rgba(99,102,241,0.3)] z-50 toast-animate border border-white/10 flex items-center gap-2">
+            {toast && createPortal(
+                <div className="fixed top-8 left-1/2 -translate-x-1/2 glass-panel text-white px-6 py-3 rounded-full shadow-[0_0_30px_rgba(99,102,241,0.3)] z-[9997] toast-animate border border-white/10 flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full bg-neon-blue animate-pulse"></div>
                     {toast}
-                </div>
+                </div>,
+                document.body
             )}
 
             {/* Add API Key Selection Button here if needed based on platform, 
@@ -1359,13 +1753,7 @@ const App: React.FC = () => {
                 for now assuming environment key is valid or handled elsewhere 
                 to minimize UI clutter as per prompt request to only add model selection. */}
 
-            <WorkflowToolbar
-                onLoad={addWorkflowToCanvas}
-                onOpenLibrary={() => setIsAssetLibraryOpen(true)}
-                onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
-            />
-
-            <div className="absolute top-0 left-0 w-full h-full pointer-events-none" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: 'top left' }}>
+            <div className={`absolute top-0 left-0 w-full h-full ${currentUser.role === 'guest' ? 'pointer-events-none opacity-10 blur-sm' : 'pointer-events-none'}`} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
                 <svg width="100%" height="100%" className="absolute top-0 left-0 overflow-visible pointer-events-none">
                     {connections.map(conn => (
                         <Connection
@@ -1379,7 +1767,6 @@ const App: React.FC = () => {
                         <path
                             d={`M ${previewConnection.start.x} ${previewConnection.start.y} C ${previewConnection.start.x + 50} ${previewConnection.start.y}, ${previewConnection.end.x - 50} ${previewConnection.end.y}, ${previewConnection.end.x} ${previewConnection.end.y}`}
                             className="stroke-neon-blue fill-none opacity-60" strokeWidth="2" strokeDasharray="5 5"
-                            style={{ transform: `translate(${-pan.x}px, ${-pan.y}px)` }}
                         />
                     )}
                     {snapLines.map((line, i) => (
@@ -1395,18 +1782,14 @@ const App: React.FC = () => {
                 </svg>
 
                 {groups.map(group => (
-                    <GroupComponent
-                        key={group.id} group={group}
-                        onRunWorkflow={runGroupWorkflow}
-                        onMouseDown={(groupId, e) => {
-                            if (e.ctrlKey) setGroups(gs => gs.map(g => g.id === groupId ? { ...g, selected: !g.selected } : g));
-                            else if (!group.selected) { deselectAll(); setGroups(gs => gs.map(g => g.id === groupId ? { ...g, selected: true } : g)); }
-                            e.stopPropagation();
-                        }}
-                        onSaveAsset={(groupId) => { setGroupToSave(groups.find(g => g.id === groupId) || null); setIsSaveAssetModalOpen(true); }}
-                        onUpdateName={(id, name) => setGroups(gs => gs.map(g => g.id === id ? { ...g, name } : g))}
-                    />
-                ))}
+                <GroupComponent
+                    key={group.id} group={group}
+                    onRunWorkflow={runGroupWorkflow}
+                    onMouseDown={handleGroupMouseDown}
+                    onSaveAsset={(groupId) => { setGroupToSave(groups.find(g => g.id === groupId) || null); setIsSaveAssetModalOpen(true); }}
+                    onUpdateName={(id, name) => setGroups(gs => gs.map(g => g.id === id ? { ...g, name } : g))}
+                />
+            ))}
 
                 {nodes.map(node => (
                     <NodeComponent
@@ -1418,6 +1801,7 @@ const App: React.FC = () => {
                         onHeaderMouseDown={handleNodeHeaderMouseDown}
                         onViewContent={(type, content, name) => setViewerContent({ type, content, name })}
                         isGenerated={generatedNodeIds.has(node.id)}
+                        onContextMenu={handleNodeContextMenu}
                     />
                 ))}
 
@@ -1441,14 +1825,77 @@ const App: React.FC = () => {
             {viewerContent && <ViewerModal {...viewerContent} onClose={() => setViewerContent(null)} />}
 
             {isSaveAssetModalOpen && groupToSave && (
-                <SaveAssetModal groupName={groupToSave.name} onClose={() => setIsSaveAssetModalOpen(false)} onSave={handleSaveAsset} />
+                <SaveAssetModal groupName={groupToSave.name} defaultVisibility="public" onClose={() => setIsSaveAssetModalOpen(false)} onSave={handleSaveAsset} />
+            )}
+
+            {selectedHistoryItem && <HistoryDetailModal item={selectedHistoryItem} onClose={() => setSelectedHistoryItem(null)} />}
+
+            {isHistoryModalOpen && (
+                <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsHistoryModalOpen(false)}>
+                    <div className="bg-[#111827] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[80vh] p-4 flex flex-col gap-3" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-between">
+                            <h3 className="text-lg font-semibold text-white">历史图库</h3>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    disabled={historyModalSelection.size === 0}
+                                    onClick={() => handleBulkDeleteHistory(Array.from(historyModalSelection))}
+                                    className={`px-3 py-1 rounded text-sm ${historyModalSelection.size === 0 ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-500'}`}
+                                >
+                                    删除选中
+                                </button>
+                                <button
+                                    disabled={historyModalSelection.size === 0}
+                                    onClick={() => {
+                                        history.filter(h => historyModalSelection.has(h.id)).forEach(item => {
+                                            const a = document.createElement('a');
+                                            a.href = `data:image/png;base64,${item.image}`;
+                                            a.download = `${item.nodeName || 'history'}.png`;
+                                            a.click();
+                                        });
+                                    }}
+                                    className={`px-3 py-1 rounded text-sm ${historyModalSelection.size === 0 ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-slate-600 text-white hover:bg-slate-500'}`}
+                                >
+                                    下载选中
+                                </button>
+                                <button onClick={() => setIsHistoryModalOpen(false)} className="text-slate-300 hover:text-white">&times;</button>
+                            </div>
+                        </div>
+                        <div className="overflow-y-auto custom-scrollbar grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                            {history.map(item => (
+                                <div key={item.id} className={`relative bg-slate-800/70 border ${historyModalSelection.has(item.id) ? 'border-sky-500' : 'border-slate-700'} rounded-lg overflow-hidden`}>
+                                    <div className="absolute top-2 left-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={historyModalSelection.has(item.id)}
+                                            onChange={(e) => {
+                                                setHistoryModalSelection(prev => {
+                                                    const next = new Set(prev);
+                                                    if (e.target.checked) next.add(item.id); else next.delete(item.id);
+                                                    return next;
+                                                });
+                                            }}
+                                        />
+                                    </div>
+                                    <img src={`data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-40 object-cover" />
+                                    <div className="p-2 text-sm text-slate-200 space-y-1">
+                                        <p className="font-semibold line-clamp-1">{item.nodeName}</p>
+                                        <p className="text-xs text-slate-400 line-clamp-2">{item.prompt}</p>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
             )}
 
             {isAssetLibraryOpen && (
                 <AssetLibrary
-                    assets={assets} onClose={() => setIsAssetLibraryOpen(false)} onAdd={addWorkflowToCanvas}
+                    assets={visibleAssets}
+                    onClose={() => setIsAssetLibraryOpen(false)}
+                    onAdd={addWorkflowToCanvas}
                     onDownload={(asset) => {
-                        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ nodes: asset.nodes, connections: asset.connections }, null, 2));
+                        const payload = { ...asset, nodes: asset.nodes, connections: asset.connections };
+                        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload, null, 2));
                         const a = document.createElement('a');
                         a.href = dataStr;
                         a.download = `${asset.name.replace(/\s/g, '_')}.json`;
@@ -1458,41 +1905,94 @@ const App: React.FC = () => {
                 />
             )}
 
-            {history.length > 0 && <HistoryTray history={history} onSelect={setSelectedHistoryItem} onClearAll={handleClearHistory} onDeleteItem={handleDeleteHistoryItem} />}
-            {selectedHistoryItem && <HistoryDetailModal item={selectedHistoryItem} onClose={() => setSelectedHistoryItem(null)} />}
+            {/* Portal overlay: toolbar, history tray, shortcuts */}
+            <UIOverlay
+                currentUser={currentUser}
+                onLogout={handleLogout}
+                onLoad={addWorkflowToCanvas}
+                onOpenLibrary={() => setIsAssetLibraryOpen(true)}
+                onOpenHistory={() => setIsHistoryModalOpen(true)}
+                onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
+                onOpenAuthModal={() => setIsAuthModalOpen(true)}
+                history={visibleHistory}
+                onSelectHistory={setSelectedHistoryItem}
+                onClearHistory={handleClearHistory}
+                onDeleteHistory={handleDeleteHistoryItem}
+                zoom={zoom}
+                onZoomChange={(z) => zoomAroundPoint(z)}
+            />
 
-            {isApiKeyModalOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsApiKeyModalOpen(false)}>
-                    <div className="bg-[#1f2937] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
-                        <div className="flex items-center justify-between">
-                            <h2 className="text-lg font-bold text-white">Set Gemini API Key</h2>
-                            <button onClick={() => setIsApiKeyModalOpen(false)} className="text-slate-400 hover:text-white">&times;</button>
+            {isApiKeyModalOpen && currentUser.role === 'admin' && (
+                createPortal(
+                    <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsApiKeyModalOpen(false)}>
+                        <div className="bg-[#1f2937] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
+                            <div className="flex items-center justify-between">
+                                <h2 className="text-lg font-bold text-white">Set Gemini API Key</h2>
+                                <button onClick={() => setIsApiKeyModalOpen(false)} className="text-slate-400 hover:text-white">&times;</button>
+                            </div>
+                            <p className="text-sm text-slate-400">Key is stored locally in your browser (localStorage). Use a limited key for safety.</p>
+                            <input
+                                type="password"
+                                value={apiKeyDraft}
+                                onChange={e => setApiKeyDraft(e.target.value)}
+                                placeholder="Paste your Gemini API key"
+                                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                            <div className="flex items-center justify-between text-xs text-slate-400">
+                                <span>Current: {apiKey ? 'saved locally' : 'not set'}</span>
+                                <button onClick={handleClearApiKey} className="text-red-400 hover:text-red-300">Clear</button>
+                            </div>
+                            <div className="flex justify-end space-x-2">
+                                <button onClick={() => setIsApiKeyModalOpen(false)} className="px-3 py-2 rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600">Cancel</button>
+                                <button onClick={handleSaveApiKey} className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500">Save</button>
+                            </div>
                         </div>
-                        <p className="text-sm text-slate-400">Key is stored locally in your browser (localStorage). Use a limited key for safety.</p>
-                        <input
-                            type="password"
-                            value={apiKeyDraft}
-                            onChange={e => setApiKeyDraft(e.target.value)}
-                            placeholder="Paste your Gemini API key"
-                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                        <div className="flex items-center justify-between text-xs text-slate-400">
-                            <span>Current: {apiKey ? 'saved locally' : 'not set'}</span>
-                            <button onClick={handleClearApiKey} className="text-red-400 hover:text-red-300">Clear</button>
-                        </div>
-                        <div className="flex justify-end space-x-2">
-                            <button onClick={() => setIsApiKeyModalOpen(false)} className="px-3 py-2 rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600">Cancel</button>
-                            <button onClick={handleSaveApiKey} className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500">Save</button>
-                        </div>
-                    </div>
-                </div>
+                    </div>,
+                    document.body
+                )
             )}
 
-            <div className="absolute bottom-6 right-6 text-xs text-slate-400 glass-panel p-3 rounded-xl select-none pointer-events-none space-y-2 backdrop-blur-md">
-                <p className="flex items-center gap-2"><kbd className="font-mono bg-white/10 px-1.5 py-0.5 rounded text-white border border-white/10">Right Click</kbd> <span>Move Canvas</span></p>
-                <p className="flex items-center gap-2"><kbd className="font-mono bg-white/10 px-1.5 py-0.5 rounded text-white border border-white/10">Ctrl + Click</kbd> <span>Multi Select</span></p>
-                <p className="flex items-center gap-2"><kbd className="font-mono bg-white/10 px-1.5 py-0.5 rounded text-white border border-white/10">Ctrl + Scroll</kbd> <span>Zoom</span></p>
-            </div>
+            { (isAuthModalOpen || currentUser.role === 'guest') && (
+                createPortal(
+                    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsAuthModalOpen(false)}>
+                        <div className="bg-[#1f2937] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-2xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
+                            <div className="flex items-center justify-between">
+                                <h2 className="text-lg font-bold text-white">Login / Manage Access</h2>
+                                <button onClick={() => setIsAuthModalOpen(false)} className="text-slate-400 hover:text-white">&times;</button>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                                <div className="space-y-3">
+                                    <h3 className="text-sm font-semibold text-slate-200">邮箱登录</h3>
+                                    <input
+                                        type="email"
+                                        value={loginName}
+                                        onChange={e => setLoginName(e.target.value)}
+                                        placeholder="Email"
+                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+                                    <input
+                                        type="password"
+                                        value={loginPassword}
+                                        onChange={e => setLoginPassword(e.target.value)}
+                                        placeholder="Password"
+                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+                                    <div className="flex items-center justify-between">
+                                        <div className="text-xs text-slate-400">使用 Supabase Auth 登录</div>
+                                        <div className="flex space-x-2">
+                                            <button onClick={() => handleLogin()} className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 text-sm">登录</button>
+                                            <button onClick={() => handleLogin(true)} className="px-3 py-2 rounded-lg bg-slate-600 text-white hover:bg-slate-500 text-sm">注册</button>
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-slate-400">当前：{currentUser.name} ({currentUser.role})</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>,
+                    document.body
+                )
+            )}
+
         </div>
     );
 };
