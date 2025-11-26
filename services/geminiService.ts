@@ -1,13 +1,25 @@
 
-import { GoogleGenAI, Modality, Part, GenerateContentParameters, HarmProbability, FinishReason } from '@google/genai';
-import type { ModelType, NodeType } from '../types';
+import { GoogleGenAI, Part, GenerateContentParameters, HarmProbability, FinishReason } from '@google/genai';
+import type { NodeType } from '../types';
 
-// Initialize the Gemini AI client at the module level.
-const apiKey = process.env.API_KEY;
-if (!apiKey || apiKey === 'dummy_key_for_ui_dev') {
-    console.warn('⚠️ Gemini API Key is not configured. Please add GEMINI_API_KEY to your .env file.');
-}
-const ai = new GoogleGenAI({ apiKey: apiKey || 'dummy_key_for_ui_dev' });
+const resolveEnvApiKey = (): string | undefined => {
+    return (
+        // Vite env variants
+        (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+        (import.meta as any).env?.VITE_API_KEY ||
+        (import.meta as any).env?.API_KEY ||
+        // Fallback for legacy process.env usage
+        (typeof process !== 'undefined' ? (process as any).env?.API_KEY : undefined)
+    );
+};
+
+const createClient = (apiKey?: string) => {
+    const resolved = apiKey || resolveEnvApiKey();
+    if (!resolved || resolved === 'dummy_key_for_ui_dev') {
+        console.warn('⚠️ Gemini API Key is not configured. Please add GEMINI_API_KEY/API_KEY to your .env or set it in the UI.');
+    }
+    return new GoogleGenAI({ apiKey: resolved || 'dummy_key_for_ui_dev' });
+};
 
 type Input = {
     type: NodeType;
@@ -70,8 +82,15 @@ const handleApiError = (response: any): string => {
 };
 
 
-export const runNode = async (instruction: string, nodeType: NodeType, inputs: Input[], model?: string): Promise<NodeResult> => {
+export const runNode = async (
+    instruction: string,
+    nodeType: NodeType,
+    inputs: Input[],
+    model?: string,
+    apiKeyOverride?: string
+): Promise<NodeResult> => {
     try {
+        const ai = createClient(apiKeyOverride);
         const fullPrompt = getFullPrompt(inputs, instruction);
 
         // CASE 1: Text Generation

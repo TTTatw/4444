@@ -1,4 +1,4 @@
-
+﻿
 import React, { useState, useCallback, useRef, MouseEvent, useMemo, useEffect } from 'react';
 import { NodeComponent } from './components/NodeComponent';
 import { ContextMenu } from './components/ContextMenu';
@@ -14,6 +14,7 @@ import { SaveAssetModal } from './components/SaveAssetModal';
 import { AssetLibrary } from './components/AssetLibrary';
 import type { Node, Connection as ConnectionType, Point, ContextMenu as ContextMenuType, Group, NodeType, HistoryItem, WorkflowAsset, SerializedNode, SerializedConnection, NodeStatus } from './types';
 import { runNode } from './services/geminiService';
+import { isSupabaseConfigured, fetchAssets, upsertAsset, deleteAsset, fetchHistoryItems, insertHistoryItem, removeHistoryItem, clearHistoryItems } from './services/storageService';
 import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH } from './constants';
 
 const TextIcon = () => (
@@ -41,6 +42,10 @@ const App: React.FC = () => {
     const [groups, setGroups] = useState<Group[]>([]);
     const [history, setHistory] = useState<HistoryItem[]>([]);
     const [assets, setAssets] = useState<WorkflowAsset[]>([]);
+    const supabaseEnabled = isSupabaseConfigured();
+    const [apiKey, setApiKey] = useState<string | null>(null);
+    const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+    const [apiKeyDraft, setApiKeyDraft] = useState('');
 
     // Undo/Redo State
     const [past, setPast] = useState<CanvasState[]>([]);
@@ -176,7 +181,7 @@ const App: React.FC = () => {
                 // then we should clear the error message from the content of generated nodes.
                 const isGenerated = connectionsRef.current.some(c => c.to === id);
                 if (isGenerated && data.content === undefined) {
-                    updatedNode.content = targetNode.type === 'image' ? '等待生成...' : '';
+                    updatedNode.content = targetNode.type === 'image' ? 'Waiting for generation...' : '';
                 }
             }
 
@@ -415,7 +420,7 @@ const App: React.FC = () => {
             if (!isReleasedOnConnector) {
                 const canvasPosition = { x: (e.clientX - pan.x) / zoom, y: (e.clientY - pan.y) / zoom };
                 const createAndConnect = (type: NodeType) => {
-                    const newNode = createNode(type, canvasPosition, type === 'text' ? '文本' : '图片');
+                    const newNode = createNode(type, canvasPosition, type === 'text' ? 'Text' : 'Image');
                     if (drawingConnection?.from) {
                         setConnections(cs => [...cs, { id: `${drawingConnection.from}-${newNode.id}`, from: drawingConnection.from!, to: newNode.id }]);
                     } else if (drawingConnection?.to) {
@@ -424,10 +429,10 @@ const App: React.FC = () => {
                     closeContextMenu();
                 };
                 setContextMenu({
-                    position: { x: e.clientX, y: e.clientY }, title: '创建并连接节点',
+                    position: { x: e.clientX, y: e.clientY }, title: 'Create and connect node',
                     options: [
-                        { label: '文本', description: '创建文本节点', action: () => createAndConnect('text'), icon: <TextIcon /> },
-                        { label: '图片', description: '创建图片节点', action: () => createAndConnect('image'), icon: <ImageIcon /> },
+                        { label: 'Text', description: 'Create text node', action: () => createAndConnect('text'), icon: <TextIcon /> },
+                        { label: 'Image', description: 'Create image node', action: () => createAndConnect('image'), icon: <ImageIcon /> },
                     ]
                 });
             }
@@ -494,19 +499,19 @@ const App: React.FC = () => {
         const canvasPosition = { x: (position.x - pan.x) / zoom, y: (position.y - pan.y) / zoom };
 
         const createAndClose = (type: NodeType) => {
-            createNode(type, canvasPosition, type === 'text' ? '文本' : '图片');
+            createNode(type, canvasPosition, type === 'text' ? 'Text' : 'Image');
             closeContextMenu();
         };
 
         setContextMenu({
-            position, title: '创建节点',
+            position,
+            title: 'Create Node',
             options: [
-                { label: '文本', description: '纯文本输入或输出', action: () => createAndClose('text'), icon: <TextIcon /> },
-                { label: '图片', description: '图片输入或输出', action: () => createAndClose('image'), icon: <ImageIcon /> },
+                { label: 'Text', description: 'Text input or output', action: () => createAndClose('text'), icon: <TextIcon /> },
+                { label: 'Image', description: 'Image input or output', action: () => createAndClose('image'), icon: <ImageIcon /> },
             ]
         });
     };
-
     const handleNodeMouseDown = (nodeId: string, e: MouseEvent) => {
         // Blur any active element to ensure the delete handler isn't blocked by a focused textarea.
         // Modified to only blur if the active element is an input or textarea,
@@ -612,7 +617,7 @@ const App: React.FC = () => {
         const nodeIds = nodesToGroup.map(n => n.id);
 
         const newGroup: Group = {
-            id: groupId, name: `新建工作流 ${groups.length + 1}`, nodeIds,
+            id: groupId, name: `New Group ${groups.length + 1}`, nodeIds,
             position: { x: minX - PADDING, y: minY - PADDING - HEADER_SPACE },
             size: { width: (maxX - minX) + 2 * PADDING, height: (maxY - minY) + 2 * PADDING + HEADER_SPACE },
             selected: true,
@@ -670,7 +675,8 @@ const App: React.FC = () => {
                 instructionToUse,
                 nodeToExecute.type,
                 inputs,
-                nodeToExecute.selectedModel
+                nodeToExecute.selectedModel,
+                apiKey || undefined
             );
 
             if (result.type === 'image') {
@@ -678,13 +684,16 @@ const App: React.FC = () => {
                 updateNodeData(nodeId, { 
                     status: 'success', 
                     inputImage: result.content, 
-                    content: '生成图片',
+                    content: 'Generated image',
                     width: undefined, // Force re-calculation of dimensions
                     height: undefined 
                 });
                 const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
                 const historyItem: HistoryItem = { id: `hist-${Date.now()}`, timestamp: new Date(), image: result.content, prompt: instructionToUse, context, nodeName: nodeToExecute.name };
                 setHistory(h => [historyItem, ...h]);
+                if (supabaseEnabled) {
+                    insertHistoryItem(historyItem).catch(err => console.error("Supabase history insert failed:", err));
+                }
             } else {
                 const update: Partial<Node> = { status: 'success', content: result.content };
                 if (nodeToExecute.type === 'image') {
@@ -840,14 +849,15 @@ const App: React.FC = () => {
                         currentNodeData.instruction,
                         currentNodeData.type,
                         inputs,
-                        currentNodeData.selectedModel
+                        currentNodeData.selectedModel,
+                        apiKey || undefined
                     );
 
                     // Update Local Data
                     const updatedNode = { ...currentNodeData };
                     if (result.type === 'image') {
                         updatedNode.inputImage = result.content;
-                        updatedNode.content = '生成图片';
+                        updatedNode.content = 'Generated image';
                         // Store history item
                         const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
                         const histItem: HistoryItem = { 
@@ -904,6 +914,9 @@ const App: React.FC = () => {
                 
                 if (newHistoryItems.length > 0) {
                     setHistory(h => [...newHistoryItems.filter(item => !h.some(existing => existing.id === item.id)).reverse(), ...h]);
+                    if (supabaseEnabled) {
+                        newHistoryItems.forEach(item => insertHistoryItem(item).catch(err => console.error("Supabase history insert failed:", err)));
+                    }
                     newHistoryItems.length = 0; 
                 }
             }
@@ -915,42 +928,81 @@ const App: React.FC = () => {
         roots.forEach(n => triggerNode(n.id));
     };
 
-    // Asset Management
-    useEffect(() => {
+    // Asset Management + History bootstrap
+    const defaultAsset: WorkflowAsset = useMemo(() => ({
+        id: 'asset-default-multimodal-1',
+        name: "Default multimodal image flow",
+        tags: ['default', 'multimodal', 'image'],
+        notes: "Sample workflow combining text and image inputs to produce a new image.",
+        nodes: [
+            { id: 'default-image-1', name: 'Image 1', type: 'image', position: { x: 0, y: 0 }, content: '', instruction: '', inputImage: null, selectedModel: 'gemini-2.5-flash-image' },
+            { id: 'default-text-1', name: 'Text 1', type: 'text', position: { x: 0, y: 250 }, content: '', instruction: '', inputImage: null, selectedModel: 'gemini-3-pro-preview' },
+            { id: 'default-image-2', name: 'Image 2', type: 'image', position: { x: 400, y: 125 }, content: '', instruction: 'Add the text as a watermark to the image.', inputImage: null, selectedModel: 'gemini-2.5-flash-image' },
+        ],
+        connections: [
+            { fromNode: 'default-image-1', toNode: 'default-image-2' },
+            { fromNode: 'default-text-1', toNode: 'default-image-2' }
+        ],
+    }), [])
+
+    const loadAssetsAndHistory = useCallback(async () => {
+        if (supabaseEnabled) {
+            try {
+                const [remoteAssets, remoteHistory] = await Promise.all([fetchAssets(), fetchHistoryItems()])
+                if (remoteAssets.length > 0) {
+                    setAssets(remoteAssets)
+                } else {
+                    setAssets([defaultAsset])
+                    await upsertAsset(defaultAsset)
+                }
+                if (remoteHistory.length > 0) {
+                    setHistory(remoteHistory)
+                }
+                return
+            } catch (error) {
+                console.error("Failed to load data from Supabase, falling back to local storage:", error)
+            }
+        }
+
         try {
-            const savedAssets = localStorage.getItem('gemini-canvas-assets');
+            const savedAssets = localStorage.getItem('gemini-canvas-assets')
             if (savedAssets) {
-                setAssets(JSON.parse(savedAssets));
+                setAssets(JSON.parse(savedAssets))
             } else {
-                const defaultAsset: WorkflowAsset = {
-                    id: 'asset-default-multimodal-1',
-                    name: "多模态图片生成",
-                    tags: ['默认', '多模态', '图片生成'],
-                    notes: "这是一个默认的工作流示例，展示了如何将文本和图片输入结合起来，以生成一张新的图片。",
-                    nodes: [
-                        { id: 'default-image-1', name: '图片 1', type: 'image', position: { x: 0, y: 0 }, content: '', instruction: '', inputImage: null, selectedModel: 'gemini-2.5-flash-image' },
-                        { id: 'default-text-1', name: '文本 1', type: 'text', position: { x: 0, y: 250 }, content: '', instruction: '', inputImage: null, selectedModel: 'gemini-3-pro-preview' },
-                        { id: 'default-image-2', name: '图片 2', type: 'image', position: { x: 400, y: 125 }, content: '', instruction: '将文字作为水印添加到图片中', inputImage: null, selectedModel: 'gemini-2.5-flash-image' },
-                    ],
-                    connections: [
-                        { fromNode: 'default-image-1', toNode: 'default-image-2' },
-                        { fromNode: 'default-text-1', toNode: 'default-image-2' }
-                    ],
-                };
-                const assetsToSave = [defaultAsset];
-                setAssets(assetsToSave);
-                localStorage.setItem('gemini-canvas-assets', JSON.stringify(assetsToSave));
+                const assetsToSave = [defaultAsset]
+                setAssets(assetsToSave)
+                localStorage.setItem('gemini-canvas-assets', JSON.stringify(assetsToSave))
             }
         } catch (error) {
-            console.error("Failed to load assets from local storage:", error);
+            console.error("Failed to load assets from local storage:", error)
         }
-    }, []);
+    }, [supabaseEnabled, defaultAsset])
 
-    const saveAssetsToLocal = (updatedAssets: WorkflowAsset[]) => {
-        setAssets(updatedAssets);
-        localStorage.setItem('gemini-canvas-assets', JSON.stringify(updatedAssets));
-    };
+    useEffect(() => {
+        loadAssetsAndHistory()
+    }, [loadAssetsAndHistory])
 
+    // Load API key from localStorage on mount
+    useEffect(() => {
+        try {
+            const stored = localStorage.getItem('user-api-key');
+            if (stored) {
+                setApiKey(stored);
+                setApiKeyDraft(stored);
+            }
+        } catch (error) {
+            console.error("Failed to read API key from localStorage:", error);
+        }
+    }, [])
+
+    const saveAssets = useCallback(async (updatedAssets: WorkflowAsset[]) => {
+        setAssets(updatedAssets)
+        if (supabaseEnabled) {
+            await Promise.all(updatedAssets.map(asset => upsertAsset(asset).catch(err => console.error("Supabase asset sync failed:", err))))
+        } else {
+            localStorage.setItem('gemini-canvas-assets', JSON.stringify(updatedAssets))
+        }
+    }, [supabaseEnabled])
     const handleSaveAsset = (details: { name: string, tags: string[], notes: string }) => {
         if (!groupToSave) return;
 
@@ -992,11 +1044,19 @@ const App: React.FC = () => {
             nodes: serializableNodes, connections: serializableConnections,
         };
 
-        saveAssetsToLocal([...assets, newAsset]);
+        saveAssets([...assets, newAsset]);
         setIsSaveAssetModalOpen(false);
         setGroupToSave(null);
-        setToast('资产保存成功！');
+        setToast('Asset saved');
         setTimeout(() => setToast(null), 3000);
+    };
+
+    const handleDeleteAsset = (assetId: string) => {
+        const remaining = assets.filter(a => a.id !== assetId);
+        saveAssets(remaining);
+        if (supabaseEnabled) {
+            deleteAsset(assetId).catch(err => console.error("Supabase asset delete failed:", err));
+        }
     };
 
     const addWorkflowToCanvas = (workflow: { nodes: SerializedNode[], connections: SerializedConnection[] }) => {
@@ -1129,7 +1189,7 @@ const App: React.FC = () => {
                     connections: connectionsToCopy,
                     groups: groupsToCopy
                 };
-                setToast('复制成功');
+                setToast('Copied');
                 setTimeout(() => setToast(null), 1000);
             }
 
@@ -1220,7 +1280,10 @@ const App: React.FC = () => {
 
     const handleClearHistory = useCallback(() => {
         setHistory([]);
-    }, []);
+        if (supabaseEnabled) {
+            clearHistoryItems().catch(err => console.error("Supabase clear history failed:", err));
+        }
+    }, [supabaseEnabled]);
 
     const handleDeleteHistoryItem = useCallback((id: string) => {
         setHistory(h => h.filter(item => item.id !== id));
@@ -1230,7 +1293,35 @@ const App: React.FC = () => {
             }
             return currentItem;
         });
-    }, []);
+        if (supabaseEnabled) {
+            removeHistoryItem(id).catch(err => console.error("Supabase delete history failed:", err));
+        }
+    }, [supabaseEnabled]);
+
+    // API Key modal handlers
+    const handleSaveApiKey = () => {
+        setApiKey(apiKeyDraft.trim() || null);
+        try {
+            if (apiKeyDraft.trim()) {
+                localStorage.setItem('user-api-key', apiKeyDraft.trim());
+            } else {
+                localStorage.removeItem('user-api-key');
+            }
+        } catch (error) {
+            console.error("Failed to write API key to localStorage:", error);
+        }
+        setIsApiKeyModalOpen(false);
+    };
+
+    const handleClearApiKey = () => {
+        setApiKey(null);
+        setApiKeyDraft('');
+        try {
+            localStorage.removeItem('user-api-key');
+        } catch (error) {
+            console.error("Failed to clear API key from localStorage:", error);
+        }
+    };
 
     return (
         <div
@@ -1271,6 +1362,7 @@ const App: React.FC = () => {
             <WorkflowToolbar
                 onLoad={addWorkflowToCanvas}
                 onOpenLibrary={() => setIsAssetLibraryOpen(true)}
+                onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
             />
 
             <div className="absolute top-0 left-0 w-full h-full pointer-events-none" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: 'top left' }}>
@@ -1362,12 +1454,39 @@ const App: React.FC = () => {
                         a.download = `${asset.name.replace(/\s/g, '_')}.json`;
                         a.click();
                     }}
-                    onDelete={(id) => saveAssetsToLocal(assets.filter(a => a.id !== id))}
+                    onDelete={handleDeleteAsset}
                 />
             )}
 
             {history.length > 0 && <HistoryTray history={history} onSelect={setSelectedHistoryItem} onClearAll={handleClearHistory} onDeleteItem={handleDeleteHistoryItem} />}
             {selectedHistoryItem && <HistoryDetailModal item={selectedHistoryItem} onClose={() => setSelectedHistoryItem(null)} />}
+
+            {isApiKeyModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsApiKeyModalOpen(false)}>
+                    <div className="bg-[#1f2937] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-between">
+                            <h2 className="text-lg font-bold text-white">Set Gemini API Key</h2>
+                            <button onClick={() => setIsApiKeyModalOpen(false)} className="text-slate-400 hover:text-white">&times;</button>
+                        </div>
+                        <p className="text-sm text-slate-400">Key is stored locally in your browser (localStorage). Use a limited key for safety.</p>
+                        <input
+                            type="password"
+                            value={apiKeyDraft}
+                            onChange={e => setApiKeyDraft(e.target.value)}
+                            placeholder="Paste your Gemini API key"
+                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <div className="flex items-center justify-between text-xs text-slate-400">
+                            <span>Current: {apiKey ? 'saved locally' : 'not set'}</span>
+                            <button onClick={handleClearApiKey} className="text-red-400 hover:text-red-300">Clear</button>
+                        </div>
+                        <div className="flex justify-end space-x-2">
+                            <button onClick={() => setIsApiKeyModalOpen(false)} className="px-3 py-2 rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600">Cancel</button>
+                            <button onClick={handleSaveApiKey} className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500">Save</button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <div className="absolute bottom-6 right-6 text-xs text-slate-400 glass-panel p-3 rounded-xl select-none pointer-events-none space-y-2 backdrop-blur-md">
                 <p className="flex items-center gap-2"><kbd className="font-mono bg-white/10 px-1.5 py-0.5 rounded text-white border border-white/10">Right Click</kbd> <span>Move Canvas</span></p>
@@ -1379,3 +1498,4 @@ const App: React.FC = () => {
 };
 
 export default App;
+
