@@ -17,6 +17,7 @@ const {
 console.log('--- DEBUG ENV START ---');
 console.log('SUPABASE_URL:', SUPABASE_URL);
 console.log('SUPABASE_SERVICE_ROLE (LAST 10):', SUPABASE_SERVICE_ROLE ? '...' + SUPABASE_SERVICE_ROLE.slice(-10) : 'MISSING');
+console.log('GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? 'SET (Starts with ' + process.env.GEMINI_API_KEY.substring(0, 4) + '...)' : 'MISSING');
 console.log('--- DEBUG ENV END ---');
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) {
