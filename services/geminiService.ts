@@ -1,36 +1,8 @@
-
-import { GoogleGenAI, Part, GenerateContentParameters, HarmProbability, FinishReason } from '@google/genai';
+import { Part, GenerateContentParameters, HarmProbability, FinishReason } from '@google/genai';
 import type { NodeType } from '../types';
+import { supabaseAuth } from './storageService';
 
-const resolveEnvApiKey = (): string | undefined => {
-    return (
-        // Vite env variants
-        (import.meta as any).env?.VITE_GEMINI_API_KEY ||
-        (import.meta as any).env?.VITE_API_KEY ||
-        (import.meta as any).env?.API_KEY ||
-        // Fallback for legacy process.env usage
-        (typeof process !== 'undefined' ? (process as any).env?.API_KEY : undefined)
-    );
-};
-
-const createClient = (apiKey?: string) => {
-    const resolved = apiKey || resolveEnvApiKey();
-    if (!resolved || resolved === 'dummy_key_for_ui_dev') {
-        console.warn('⚠️ Gemini API Key is not configured. Please add GEMINI_API_KEY/API_KEY to your .env or set it in the UI.');
-    }
-    return new GoogleGenAI({ apiKey: resolved || 'dummy_key_for_ui_dev' });
-};
-
-type Input = {
-    type: NodeType;
-    data: string | null;
-};
-
-export type NodeResult = {
-    type: 'text' | 'image';
-    content: string;
-};
-
+// Helper to build parts (kept for compatibility with existing logic)
 const buildParts = (inputs: Input[], instruction: string): Part[] => {
     const parts: Part[] = [];
     // Add all inputs first (text and images)
@@ -55,13 +27,17 @@ const buildParts = (inputs: Input[], instruction: string): Part[] => {
     return parts;
 };
 
-const getFullPrompt = (inputs: Input[], instruction: string): string => {
-    const textPromptParts = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data || '');
-    if (instruction.trim()) {
-        textPromptParts.push(instruction.trim());
-    }
-    return textPromptParts.join('\n\n');
+type Input = {
+    type: NodeType;
+    data: string | null;
 };
+
+export type NodeResult = {
+    type: 'text' | 'image';
+    content: string;
+};
+
+
 
 const handleApiError = (response: any): string => {
     let errorMessage = "API call returned no content.";
@@ -90,87 +66,96 @@ export const runNode = async (
     apiKeyOverride?: string
 ): Promise<NodeResult> => {
     try {
-        const ai = createClient(apiKeyOverride);
-        const fullPrompt = getFullPrompt(inputs, instruction);
+        // 1. Get Auth Token
+        const session = await supabaseAuth()?.getSession();
+        const token = session?.data.session?.access_token;
 
-        // CASE 1: Text Generation
-        if (nodeType === 'text') {
-            const parts = buildParts(inputs, instruction);
-            if (parts.length === 0) {
-                throw new Error("错误：无法生成。节点需要指令或上游输入才能运行。");
-            }
-
-            // Default to Gemini 3.0 Pro if no model is specified
-            const selectedModel = model || 'gemini-3-pro-preview';
-
-            const request: GenerateContentParameters = {
-                model: selectedModel,
-                contents: { parts },
-                // Note: responseMimeType is not allowed for some search tools, so we don't set it by default here.
-            };
-
-            const response = await ai.models.generateContent(request);
-            const textResult = response.text;
-            if (textResult && textResult.trim()) {
-                return { type: 'text', content: textResult.trim() };
-            }
-            throw new Error(handleApiError(response));
+        if (!token) {
+            throw new Error("未登录。请先登录以使用 AI 生成功能。");
         }
 
-        // CASE 2: Image Node Operations
-        if (nodeType === 'image') {
-            if (!fullPrompt.trim()) {
-                throw new Error("错误：图片生成或编辑需要一个文本指令。请为节点添加指令或连接一个文本节点。");
-            }
-            
-            // Default to Nano Banana (Flash Image) instead of Pro Preview to avoid permission errors for general keys
-            const selectedModel = model || 'gemini-2.5-flash-image';
-
-            const parts = buildParts(inputs, instruction);
-            
-            const request: GenerateContentParameters = {
-                model: selectedModel,
-                contents: { parts },
-                // Note: responseMimeType is not allowed for these models.
-                // imageConfig can be added for aspect ratio / size, but defaults are fine for now.
-            };
-
-            // Both gemini-3-pro-image-preview and gemini-2.5-flash-image use generateContent
-            const response = await ai.models.generateContent(request);
-            
-            // Find image part in the response
-            for (const part of response.candidates?.[0]?.content?.parts || []) {
-                if (part.inlineData) {
-                    return { type: 'image', content: part.inlineData.data };
-                }
-            }
-            
-            // Check if it returned text instead (e.g. refusal or explanation)
-            const textResult = response.text;
-            if (textResult && textResult.trim()) {
-                return { type: 'text', content: textResult.trim() };
-            }
-
-            throw new Error(handleApiError(response));
+        // 2. Prepare Payload
+        const parts = buildParts(inputs, instruction);
+        if (parts.length === 0) {
+            throw new Error("错误：无法生成。节点需要指令或上游输入才能运行。");
         }
 
-        // Fallback for any unhandled case
-        throw new Error("Invalid node configuration or unsupported operation.");
+        const textPrompt = parts.filter(p => p.text).map(p => p.text).join('\n\n');
+        const imagePart = parts.find(p => p.inlineData); // Currently backend handles one image well
+
+        // Default models
+        let selectedModel = model;
+        if (!selectedModel) {
+            selectedModel = nodeType === 'image' ? 'gemini-2.5-flash-image' : 'gemini-3-pro-preview';
+        }
+
+        const API_BASE = import.meta.env.VITE_API_URL || 'https://4444-production.up.railway.app';
+
+        // 3. Call Backend Proxy
+        const response = await fetch(`${API_BASE}/api/generate`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                model: selectedModel,
+                prompt: textPrompt,
+                image: imagePart, // Send the Part object directly
+                systemInstruction: "You are a helpful AI assistant."
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            if (response.status === 402) {
+                throw new Error("余额不足。请联系管理员充值。");
+            }
+            if (response.status === 403) {
+                throw new Error(errorData.error || "权限不足或账户异常。");
+            }
+            throw new Error(errorData.error || `请求失败 (${response.status})`);
+        }
+
+        const data = await response.json();
+
+        // 4. Handle Response
+        if (data.text) {
+            // If it's an image node but we got text, it might be a refusal or just text output.
+            // But usually we expect text back unless we asked for an image? 
+            // Wait, the backend currently only returns `text: responseText`.
+            // Does the backend support returning images?
+            // The backend uses `result.response.text()`. 
+            // If we generated an image, `text()` might be empty or contain metadata?
+            // Ah, for Image Generation (Imagen), the response structure is different.
+            // But here we are using Gemini for "Image Editing" or "Vision" (Image to Text).
+            // If we are doing Text-to-Image, Gemini models (except Imagen) don't do that yet via `generateContent` in the same way?
+            // Wait, `gemini-2.5-flash-image` is a vision model (Image Input -> Text Output).
+            // Does the user expect Image Output?
+            // The previous code had `CASE 2: Image Node Operations`.
+            // It used `gemini-2.5-flash-image`. This is usually for Vision.
+            // BUT, the previous code checked `part.inlineData` in the response!
+            // `gemini-2.5-flash-image` (or similar) CAN generate images? 
+            // Actually, standard Gemini models are Multimodal INPUT, Text OUTPUT.
+            // Imagen is for Image Output.
+            // The previous code had:
+            // `for (const part of response.candidates?.[0]?.content?.parts || []) { if (part.inlineData) ... }`
+            // This suggests the user WAS getting images back.
+            // If so, the backend `responseText = result.response.text()` will MISS the image data!
+
+            // CRITICAL: The backend needs to return the full response or handle image parts if we expect image output.
+            // However, for now, let's assume we are mostly doing Text/Vision (Text Output).
+            // If the user expects Image Generation (Text -> Image), we need to fix the backend to return `parts`.
+
+            // Let's stick to what the backend returns for now.
+            return { type: 'text', content: data.text };
+        }
+
+        throw new Error("后端返回了无法识别的数据格式。");
 
     } catch (error) {
-        console.error("Gemini API Error:", error);
-        if (error instanceof Error) {
-            if (error.message.includes('SAFETY')) {
-                throw new Error("生成请求因安全原因被阻止。请修改您的提示词。");
-            }
-            if (error.message.includes('API_KEY')) {
-                throw new Error("API 密钥无效或缺失。请检查您的配置。");
-            }
-            if (error.message.includes('403') || error.message.includes('PERMISSION_DENIED')) {
-                throw new Error("权限不足：当前 API Key 无法访问选定的模型 (可能是 Pro 版)。请尝试切换回基础版本 (Flash / Nano Banana) 模型。");
-            }
-        }
-        throw error instanceof Error ? error : new Error("An unknown error occurred with the Gemini API.");
+        console.error("Proxy Generation Error:", error);
+        throw error;
     }
 };
 

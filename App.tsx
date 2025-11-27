@@ -14,6 +14,8 @@ import { HistoryTray } from './components/HistoryTray';
 import { HistoryDetailModal } from './components/HistoryDetailModal';
 import { SaveAssetModal } from './components/SaveAssetModal';
 import { AssetLibrary } from './components/AssetLibrary';
+import { LoginPage } from './components/LoginPage';
+import { AdminDashboard } from './components/AdminDashboard';
 import type { Node, Connection as ConnectionType, Point, ContextMenu as ContextMenuType, Group, NodeType, HistoryItem, WorkflowAsset, SerializedNode, SerializedConnection, NodeStatus } from './types';
 import { runNode } from './services/geminiService';
 import { isSupabaseConfigured, fetchAssets, upsertAsset, deleteAsset, fetchHistoryItems, insertHistoryItem, removeHistoryItem, clearHistoryItems, fetchUsers, upsertUser, deleteUser, supabaseAuth } from './services/storageService';
@@ -55,6 +57,7 @@ const App: React.FC = () => {
     const [currentUser, setCurrentUser] = useState<{ role: 'guest' | 'admin' | 'user'; name: string; id?: string }>({ role: 'guest', name: 'Guest' });
     const [newAuthorizedName, setNewAuthorizedName] = useState('');
     const [newAuthorizedPassword, setNewAuthorizedPassword] = useState('');
+    const [isAdminDashboardOpen, setIsAdminDashboardOpen] = useState(false);
 
     // Undo/Redo State
     const [past, setPast] = useState<CanvasState[]>([]);
@@ -1210,7 +1213,7 @@ const App: React.FC = () => {
             if (!supabaseEnabled || currentUser.role !== 'admin') return;
             try {
                 const remoteUsers = await fetchUsers();
-                setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.name, password: u.password })));
+                setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.email || u.name, password: u.password })));
             } catch (error) {
                 console.error("Failed to load users from Supabase:", error);
             }
@@ -1265,7 +1268,7 @@ const App: React.FC = () => {
                 position: { x: node.position.x - minX, y: node.position.y - minY },
                 content: shouldPreserveContent ? node.content : '',
                 instruction: node.instruction,
-                inputImage: null, // Always clear image data
+                inputImage: node.inputImage, // Preserve image data
                 selectedModel: node.selectedModel,
             };
         });
@@ -1611,12 +1614,12 @@ const App: React.FC = () => {
         }
     };
 
-    const handleLogin = async (register = false) => {
+    const handleLogin = async (register = false, email = loginName, password = loginPassword) => {
         const auth = supabaseAuth();
         if (!auth) {
             // Offline/Local mode fallback
             console.warn("Supabase not configured, using local offline mode.");
-            setCurrentUser({ role: 'admin', name: loginName || 'Local User', id: 'local-user' });
+            setCurrentUser({ role: 'admin', name: email || 'Local User', id: 'local-user' });
             setIsAuthModalOpen(false);
             setToast('已进入离线模式');
             setTimeout(() => setToast(null), 2000);
@@ -1624,13 +1627,13 @@ const App: React.FC = () => {
         }
         try {
             if (register) {
-                const { error } = await auth.signUp({ email: loginName, password: loginPassword });
+                const { error } = await auth.signUp({ email, password });
                 if (error) throw error;
                 setToast('注册成功，请登录');
                 setTimeout(() => setToast(null), 2000);
                 return;
             }
-            const { data, error } = await auth.signInWithPassword({ email: loginName, password: loginPassword });
+            const { data, error } = await auth.signInWithPassword({ email, password });
             if (error || !data.session) throw error || new Error('No session');
             const role = deriveRole(data.session.user.email || '', (data.session.user.user_metadata as any)?.role);
             setCurrentUser({ role, name: data.session.user.email || 'User', id: data.session.user.id });
@@ -1683,7 +1686,7 @@ const App: React.FC = () => {
             }
             await upsertUser({ name: newAuthorizedName, password: '' });
             const remoteUsers = await fetchUsers();
-            setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.name, password: u.password })));
+            setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.email || u.name, password: u.password })));
             setNewAuthorizedName('');
             setNewAuthorizedPassword('');
             setToast('已添加授权账号');
@@ -1698,53 +1701,18 @@ const App: React.FC = () => {
             const target = authorizedUsers.find(u => u.name === name);
             if (target?.id) await deleteUser(target.id);
             const remoteUsers = await fetchUsers();
-            setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.name, password: u.password })));
+            setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.email || u.name, password: u.password })));
         } catch (error) {
             console.error("Failed to delete user:", error);
         }
     };
 
     if (currentUser.role === 'guest') {
-        return (
-            <div className="w-screen h-screen bg-[#0f1118] flex items-center justify-center text-slate-200">
-                <div className="bg-[#141925] border border-slate-700 rounded-3xl shadow-2xl w-full max-w-3xl p-10 space-y-8">
-                    <div>
-                        <h1 className="text-2xl font-bold text-white">登录到工作流画布</h1>
-                        <p className="text-sm text-slate-400 mt-2">使用您的邮箱和密码登录。管理员可以在登录后添加授权账号。</p>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                        <div className="space-y-3">
-                            <input
-                                type="email"
-                                value={loginName}
-                                onChange={e => setLoginName(e.target.value)}
-                                placeholder="邮箱"
-                                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                            <input
-                                type="password"
-                                value={loginPassword}
-                                onChange={e => setLoginPassword(e.target.value)}
-                                placeholder="密码"
-                                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                            <div className="flex items-center gap-3">
-                                <button onClick={() => handleLogin()} className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 text-sm">登录</button>
-                                <button onClick={() => handleLogin(true)} className="px-4 py-2 rounded-lg bg-slate-600 text-white hover:bg-slate-500 text-sm">注册</button>
-                            </div>
-                        </div>
-                        <div className="space-y-3 bg-slate-900/60 rounded-2xl border border-slate-700 p-4">
-                            <h3 className="text-sm font-semibold text-slate-200">提示</h3>
-                            <ul className="text-sm text-slate-400 space-y-2 list-disc list-inside">
-                                <li>登录后才能进入画布和节点操作</li>
-                                <li>管理员邮箱（env: VITE_ADMIN_EMAILS 或 Supabase metadata role=admin）可管理 API 与授权账号</li>
-                                <li>忘记密码请在 Supabase 控制台重置或使用注册创建新账号</li>
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        );
+        return <LoginPage onLogin={(email, password, isRegister) => {
+            setLoginName(email);
+            setLoginPassword(password);
+            return handleLogin(isRegister, email, password);
+        }} />;
     }
 
     return (
@@ -1774,13 +1742,15 @@ const App: React.FC = () => {
                 }}
             />
 
-            {toast && createPortal(
-                <div className="fixed top-8 left-1/2 -translate-x-1/2 glass-panel text-white px-6 py-3 rounded-full shadow-[0_0_30px_rgba(99,102,241,0.3)] z-[10000] toast-animate border border-white/10 flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-neon-blue animate-pulse"></div>
-                    {toast}
-                </div>,
-                document.body
-            )}
+            {
+                toast && createPortal(
+                    <div className="fixed top-8 left-1/2 -translate-x-1/2 glass-panel text-white px-6 py-3 rounded-full shadow-[0_0_30px_rgba(99,102,241,0.3)] z-[10000] toast-animate border border-white/10 flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-neon-blue animate-pulse"></div>
+                        {toast}
+                    </div>,
+                    document.body
+                )
+            }
 
             {/* Add API Key Selection Button here if needed based on platform, 
                 though gemini-3-pro-image-preview requires it, 
@@ -1852,92 +1822,100 @@ const App: React.FC = () => {
 
             {selectionBox && <div className="absolute border border-neon-blue/50 bg-neon-blue/10 pointer-events-none rounded-md backdrop-blur-[1px]" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />}
 
-            {toolbarPosition && selectionType !== 'none' && (
-                <SelectionToolbar position={toolbarPosition} onGroup={groupSelectedNodes} onUngroup={ungroupSelectedNodes} selectionType={selectionType} />
-            )}
+            {
+                toolbarPosition && selectionType !== 'none' && (
+                    <SelectionToolbar position={toolbarPosition} onGroup={groupSelectedNodes} onUngroup={ungroupSelectedNodes} selectionType={selectionType} />
+                )
+            }
 
             {viewerContent && <ViewerModal {...viewerContent} onClose={() => setViewerContent(null)} />}
 
-            {isSaveAssetModalOpen && groupToSave && (
-                <SaveAssetModal groupName={groupToSave.name} defaultVisibility="public" onClose={() => setIsSaveAssetModalOpen(false)} onSave={handleSaveAsset} />
-            )}
+            {
+                isSaveAssetModalOpen && groupToSave && (
+                    <SaveAssetModal groupName={groupToSave.name} defaultVisibility="public" onClose={() => setIsSaveAssetModalOpen(false)} onSave={handleSaveAsset} />
+                )
+            }
 
             {selectedHistoryItem && <HistoryDetailModal item={selectedHistoryItem} onClose={() => setSelectedHistoryItem(null)} />}
 
-            {isHistoryModalOpen && (
-                <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsHistoryModalOpen(false)}>
-                    <div className="bg-[#111827] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[80vh] p-4 flex flex-col gap-3" onClick={e => e.stopPropagation()}>
-                        <div className="flex items-center justify-between">
-                            <h3 className="text-lg font-semibold text-white">历史图库</h3>
-                            <div className="flex items-center gap-2">
-                                <button
-                                    disabled={historyModalSelection.size === 0}
-                                    onClick={() => handleBulkDeleteHistory(Array.from(historyModalSelection))}
-                                    className={`px-3 py-1 rounded text-sm ${historyModalSelection.size === 0 ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-500'}`}
-                                >
-                                    删除选中
-                                </button>
-                                <button
-                                    disabled={historyModalSelection.size === 0}
-                                    onClick={() => {
-                                        history.filter(h => historyModalSelection.has(h.id)).forEach(item => {
-                                            const a = document.createElement('a');
-                                            a.href = `data:image/png;base64,${item.image}`;
-                                            a.download = `${item.nodeName || 'history'}.png`;
-                                            a.click();
-                                        });
-                                    }}
-                                    className={`px-3 py-1 rounded text-sm ${historyModalSelection.size === 0 ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-slate-600 text-white hover:bg-slate-500'}`}
-                                >
-                                    下载选中
-                                </button>
-                                <button onClick={() => setIsHistoryModalOpen(false)} className="text-slate-300 hover:text-white">&times;</button>
+            {
+                isHistoryModalOpen && (
+                    <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsHistoryModalOpen(false)}>
+                        <div className="bg-[#111827] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[80vh] p-4 flex flex-col gap-3" onClick={e => e.stopPropagation()}>
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-lg font-semibold text-white">历史图库</h3>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        disabled={historyModalSelection.size === 0}
+                                        onClick={() => handleBulkDeleteHistory(Array.from(historyModalSelection))}
+                                        className={`px-3 py-1 rounded text-sm ${historyModalSelection.size === 0 ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-500'}`}
+                                    >
+                                        删除选中
+                                    </button>
+                                    <button
+                                        disabled={historyModalSelection.size === 0}
+                                        onClick={() => {
+                                            history.filter(h => historyModalSelection.has(h.id)).forEach(item => {
+                                                const a = document.createElement('a');
+                                                a.href = `data:image/png;base64,${item.image}`;
+                                                a.download = `${item.nodeName || 'history'}.png`;
+                                                a.click();
+                                            });
+                                        }}
+                                        className={`px-3 py-1 rounded text-sm ${historyModalSelection.size === 0 ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-slate-600 text-white hover:bg-slate-500'}`}
+                                    >
+                                        下载选中
+                                    </button>
+                                    <button onClick={() => setIsHistoryModalOpen(false)} className="text-slate-300 hover:text-white">&times;</button>
+                                </div>
+                            </div>
+                            <div className="overflow-y-auto custom-scrollbar grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                                {history.map(item => (
+                                    <div key={item.id} className={`relative bg-slate-800/70 border ${historyModalSelection.has(item.id) ? 'border-sky-500' : 'border-slate-700'} rounded-lg overflow-hidden`}>
+                                        <div className="absolute top-2 left-2">
+                                            <input
+                                                type="checkbox"
+                                                checked={historyModalSelection.has(item.id)}
+                                                onChange={(e) => {
+                                                    setHistoryModalSelection(prev => {
+                                                        const next = new Set(prev);
+                                                        if (e.target.checked) next.add(item.id); else next.delete(item.id);
+                                                        return next;
+                                                    });
+                                                }}
+                                            />
+                                        </div>
+                                        <img src={`data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-40 object-cover" />
+                                        <div className="p-2 text-sm text-slate-200 space-y-1">
+                                            <p className="font-semibold line-clamp-1">{item.nodeName}</p>
+                                            <p className="text-xs text-slate-400 line-clamp-2">{item.prompt}</p>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
-                        <div className="overflow-y-auto custom-scrollbar grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                            {history.map(item => (
-                                <div key={item.id} className={`relative bg-slate-800/70 border ${historyModalSelection.has(item.id) ? 'border-sky-500' : 'border-slate-700'} rounded-lg overflow-hidden`}>
-                                    <div className="absolute top-2 left-2">
-                                        <input
-                                            type="checkbox"
-                                            checked={historyModalSelection.has(item.id)}
-                                            onChange={(e) => {
-                                                setHistoryModalSelection(prev => {
-                                                    const next = new Set(prev);
-                                                    if (e.target.checked) next.add(item.id); else next.delete(item.id);
-                                                    return next;
-                                                });
-                                            }}
-                                        />
-                                    </div>
-                                    <img src={`data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-40 object-cover" />
-                                    <div className="p-2 text-sm text-slate-200 space-y-1">
-                                        <p className="font-semibold line-clamp-1">{item.nodeName}</p>
-                                        <p className="text-xs text-slate-400 line-clamp-2">{item.prompt}</p>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
-            {isAssetLibraryOpen && (
-                <AssetLibrary
-                    assets={visibleAssets}
-                    onClose={() => setIsAssetLibraryOpen(false)}
-                    onAdd={addWorkflowToCanvas}
-                    onDownload={(asset) => {
-                        const payload = { ...asset, nodes: asset.nodes, connections: asset.connections };
-                        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload, null, 2));
-                        const a = document.createElement('a');
-                        a.href = dataStr;
-                        a.download = `${asset.name.replace(/\s/g, '_')}.json`;
-                        a.click();
-                    }}
-                    onDelete={handleDeleteAsset}
-                />
-            )}
+            {
+                isAssetLibraryOpen && (
+                    <AssetLibrary
+                        assets={visibleAssets}
+                        onClose={() => setIsAssetLibraryOpen(false)}
+                        onAdd={addWorkflowToCanvas}
+                        onDownload={(asset) => {
+                            const payload = { ...asset, nodes: asset.nodes, connections: asset.connections };
+                            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload, null, 2));
+                            const a = document.createElement('a');
+                            a.href = dataStr;
+                            a.download = `${asset.name.replace(/\s/g, '_')}.json`;
+                            a.click();
+                        }}
+                        onDelete={handleDeleteAsset}
+                    />
+                )
+            }
 
             {/* Portal overlay: toolbar, history tray, shortcuts */}
             <UIOverlay
@@ -1948,6 +1926,7 @@ const App: React.FC = () => {
                 onOpenHistory={() => setIsHistoryModalOpen(true)}
                 onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
                 onOpenAuthModal={() => setIsAccountModalOpen(true)}
+                onOpenAdminDashboard={() => setIsAdminDashboardOpen(true)}
                 history={visibleHistory}
                 onSelectHistory={setSelectedHistoryItem}
                 onClearHistory={handleClearHistory}
@@ -1956,89 +1935,126 @@ const App: React.FC = () => {
                 onZoomChange={(z) => zoomAroundPoint(z)}
             />
 
-            {isApiKeyModalOpen && currentUser.role === 'admin' && (
-                createPortal(
-                    <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsApiKeyModalOpen(false)}>
-                        <div className="bg-[#1f2937] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            {isAdminDashboardOpen && currentUser.role === 'admin' && (
+                <AdminDashboard onClose={() => setIsAdminDashboardOpen(false)} currentUser={currentUser} />
+            )}
+
+            {
+                isApiKeyModalOpen && currentUser.role === 'admin' && (
+                    createPortal(
+                        <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsApiKeyModalOpen(false)}>
+                            <div className="bg-[#1f2937] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
+                                <div className="flex items-center justify-between">
+                                    <h2 className="text-lg font-bold text-white">Set Gemini API Key</h2>
+                                    <button onClick={() => setIsApiKeyModalOpen(false)} className="text-slate-400 hover:text-white">&times;</button>
+                                </div>
+                                <p className="text-sm text-slate-400">Key is stored locally in your browser (localStorage). Use a limited key for safety.</p>
+                                <input
+                                    type="password"
+                                    value={apiKeyDraft}
+                                    onChange={e => setApiKeyDraft(e.target.value)}
+                                    placeholder="Paste your Gemini API key"
+                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                />
+                                <div className="flex items-center justify-between text-xs text-slate-400">
+                                    <span>Current: {apiKey ? 'saved locally' : 'not set'}</span>
+                                    <button onClick={handleClearApiKey} className="text-red-400 hover:text-red-300">Clear</button>
+                                </div>
+                                <div className="flex justify-end space-x-2">
+                                    <button onClick={() => setIsApiKeyModalOpen(false)} className="px-3 py-2 rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600">Cancel</button>
+                                    <button onClick={handleSaveApiKey} className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500">Save</button>
+                                </div>
+                            </div>
+                        </div>,
+                        document.body
+                    )
+                )
+            }
+
+            {
+                isAccountModalOpen && currentUser.role !== 'guest' && createPortal(
+                    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsAccountModalOpen(false)}>
+                        <div className="bg-[#0f1625] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-3xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
                             <div className="flex items-center justify-between">
-                                <h2 className="text-lg font-bold text-white">Set Gemini API Key</h2>
-                                <button onClick={() => setIsApiKeyModalOpen(false)} className="text-slate-400 hover:text-white">&times;</button>
+                                <div className="flex items-center gap-3">
+                                    <div className="px-3 py-1 rounded-full bg-slate-800 text-slate-200 text-sm">账户信息</div>
+                                    <div className="px-2 py-1 rounded-full text-xs border border-slate-600 text-slate-300">
+                                        {currentUser.role === 'admin' ? '管理员' : '授权用户'}
+                                    </div>
+                                </div>
+                                <button onClick={() => setIsAccountModalOpen(false)} className="text-slate-400 hover:text-white text-lg">&times;</button>
                             </div>
-                            <p className="text-sm text-slate-400">Key is stored locally in your browser (localStorage). Use a limited key for safety.</p>
-                            <input
-                                type="password"
-                                value={apiKeyDraft}
-                                onChange={e => setApiKeyDraft(e.target.value)}
-                                placeholder="Paste your Gemini API key"
-                                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                            <div className="flex items-center justify-between text-xs text-slate-400">
-                                <span>Current: {apiKey ? 'saved locally' : 'not set'}</span>
-                                <button onClick={handleClearApiKey} className="text-red-400 hover:text-red-300">Clear</button>
-                            </div>
-                            <div className="flex justify-end space-x-2">
-                                <button onClick={() => setIsApiKeyModalOpen(false)} className="px-3 py-2 rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600">Cancel</button>
-                                <button onClick={handleSaveApiKey} className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500">Save</button>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div className="space-y-3">
+                                    <p className="text-sm text-slate-300">邮箱：{currentUser.name}</p>
+                                    <p className="text-sm text-slate-300">角色：{currentUser.role}</p>
+                                </div>
+                                {currentUser.role === 'admin' && (
+                                    <div className="space-y-3">
+                                        <h3 className="text-sm font-semibold text-slate-200">授权账号</h3>
+                                        <input
+                                            type="email"
+                                            value={newUserEmail}
+                                            onChange={e => setNewUserEmail(e.target.value)}
+                                            placeholder="授权邮箱（Supabase 要求有效邮箱）"
+                                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                        <input
+                                            type="password"
+                                            value={newUserPassword}
+                                            onChange={e => setNewUserPassword(e.target.value)}
+                                            placeholder="设置密码"
+                                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                        <button
+                                            onClick={handleCreateUser}
+                                            className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 text-sm w-fit"
+                                        >
+                                            创建授权账号
+                                        </button>
+                                        <p className="text-xs text-slate-400 leading-5">
+                                            创建后用户将直接写入 Supabase Auth，请确保邮箱/密码有效。<br />
+                                            如果需要查看/删除授权用户，可在 Supabase 控制台的 Authentication → Users 中操作（支持备注）。
+                                        </p>
+
+                                        {/* User List Section */}
+                                        <div className="mt-6 border-t border-slate-700 pt-4">
+                                            <h3 className="text-sm font-semibold text-slate-200 mb-3">已授权用户列表 ({authorizedUsers.length})</h3>
+                                            <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar pr-1">
+                                                {authorizedUsers.length === 0 ? (
+                                                    <p className="text-xs text-slate-500 italic">暂无授权用户</p>
+                                                ) : (
+                                                    authorizedUsers.map((user, idx) => (
+                                                        <div key={user.id || idx} className="flex items-center justify-between bg-slate-800/50 p-2 rounded-lg border border-slate-700/50 group hover:border-slate-600 transition-colors">
+                                                            <div className="flex flex-col">
+                                                                <span className="text-xs text-slate-300 font-mono">{user.name}</span>
+                                                            </div>
+                                                            <button
+                                                                onClick={() => {
+                                                                    if (confirm(`确定要删除用户 ${user.name} 吗？`)) {
+                                                                        handleRemoveAuthorizedUser(user.name);
+                                                                    }
+                                                                }}
+                                                                className="text-slate-500 hover:text-red-400 p-1.5 hover:bg-red-900/20 rounded-md transition-all opacity-0 group-hover:opacity-100"
+                                                                title="删除用户"
+                                                            >
+                                                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                                            </button>
+                                                        </div>
+                                                    ))
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>,
                     document.body
                 )
-            )}
+            }
 
-            {isAccountModalOpen && currentUser.role !== 'guest' && createPortal(
-                <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsAccountModalOpen(false)}>
-                    <div className="bg-[#0f1625] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-3xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <div className="px-3 py-1 rounded-full bg-slate-800 text-slate-200 text-sm">账户信息</div>
-                                <div className="px-2 py-1 rounded-full text-xs border border-slate-600 text-slate-300">
-                                    {currentUser.role === 'admin' ? '管理员' : '授权用户'}
-                                </div>
-                            </div>
-                            <button onClick={() => setIsAccountModalOpen(false)} className="text-slate-400 hover:text-white text-lg">&times;</button>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div className="space-y-3">
-                                <p className="text-sm text-slate-300">邮箱：{currentUser.name}</p>
-                                <p className="text-sm text-slate-300">角色：{currentUser.role}</p>
-                            </div>
-                            {currentUser.role === 'admin' && (
-                                <div className="space-y-3">
-                                    <h3 className="text-sm font-semibold text-slate-200">授权账号</h3>
-                                    <input
-                                        type="email"
-                                        value={newUserEmail}
-                                        onChange={e => setNewUserEmail(e.target.value)}
-                                        placeholder="授权邮箱（Supabase 要求有效邮箱）"
-                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                    />
-                                    <input
-                                        type="password"
-                                        value={newUserPassword}
-                                        onChange={e => setNewUserPassword(e.target.value)}
-                                        placeholder="设置密码"
-                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                    />
-                                    <button
-                                        onClick={handleCreateUser}
-                                        className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 text-sm w-fit"
-                                    >
-                                        创建授权账号
-                                    </button>
-                                    <p className="text-xs text-slate-400 leading-5">
-                                        创建后用户将直接写入 Supabase Auth，请确保邮箱/密码有效。<br />
-                                        如果需要查看/删除授权用户，可在 Supabase 控制台的 Authentication → Users 中操作（支持备注）。
-                                    </p>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>,
-                document.body
-            )}
-
-        </div>
+        </div >
     );
 };
 
