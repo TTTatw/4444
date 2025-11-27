@@ -293,9 +293,9 @@ app.get('/api/admin/logs', authGuard, async (req, res) => {
 });
 
 // --- Proxy Generation Endpoint ---
-import { GoogleGenerativeAI } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 app.post('/api/generate', authGuard, async (req, res) => {
   const { model = 'gemini-1.5-flash', prompt, image, systemInstruction } = req.body;
@@ -315,30 +315,29 @@ app.post('/api/generate', authGuard, async (req, res) => {
     if (profile.balance < COST_PER_REQUEST) return res.status(402).json({ error: 'Insufficient balance' });
 
     // 2. Call Google API
-    // Note: This is a simplified call. You might need to adjust based on exact model inputs (text vs vision)
-    // For now assuming text-only or text-with-image support
-    // We need to initialize the model. 
-    // Wait, the @google/genai SDK usage might differ. Let's assume standard usage for now or check docs if needed.
-    // Actually, the user's frontend uses @google/genai, let's match that style if possible, 
-    // OR use the REST API directly if SDK is troublesome. 
-    // Let's use the SDK we just installed.
+    // Using @google/genai SDK (v0.1.0+)
 
-    // Re-initializing per request or globally? Globally is better but we need the key.
-    // Assuming GEMINI_API_KEY is in process.env (we need to add it to .env if not there)
-
-    const genModel = genAI.getGenerativeModel({ model: model });
-
-    let result;
+    // Prepare parts
+    const parts = [];
+    if (prompt) parts.push({ text: prompt });
     if (image) {
-      // Handle image input (base64)
-      // This part depends on how the frontend sends the image.
-      // Assuming standard prompt + image parts
-      result = await genModel.generateContent([prompt, image]);
-    } else {
-      result = await genModel.generateContent(prompt);
+      // Assuming image is passed as a Part object or similar structure from frontend
+      // Frontend sends: { inlineData: { mimeType: ..., data: ... } }
+      // The SDK expects 'Part' objects.
+      parts.push(image);
     }
 
-    const responseText = result.response.text();
+    const request = {
+      model: model,
+      contents: { parts }
+    };
+
+    const result = await genAI.models.generateContent(request);
+    const responseText = result.text; // In new SDK, result.text is a property (getter)
+    // In frontend code: `const textResult = response.text;` (property)
+    // Let's verify frontend code again.
+    // Frontend: `const response = await ai.models.generateContent(request); const textResult = response.text;`
+    // So it is a property.
 
     // 3. Deduct Balance & Log Usage (Transactional ideally, but sequential for now)
     const { error: updateError } = await supabaseAdmin
