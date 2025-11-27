@@ -1634,19 +1634,19 @@ const App: React.FC = () => {
 
     // Admin create new user via Supabase Auth (email/password)
     const handleCreateUser = async () => {
-        const auth = supabaseAuth();
-        if (!auth) return;
         if (!newUserEmail || !newUserPassword) {
             alert('请输入授权邮箱和密码');
             return;
         }
         try {
-            const { error } = await auth.signUp({ email: newUserEmail.trim(), password: newUserPassword });
-            if (error) throw error;
+            await upsertUser({ name: newUserEmail.trim(), password: newUserPassword });
             setToast('创建授权账号成功');
             setNewUserEmail('');
             setNewUserPassword('');
             setTimeout(() => setToast(null), 2000);
+            // refresh list
+            const remoteUsers = await fetchUsers();
+            setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.name, password: u.password })));
         } catch (err) {
             alert('创建授权账号失败：' + (err as Error).message);
         }

@@ -3,6 +3,7 @@ import type { HistoryItem, SerializedConnection, SerializedNode, WorkflowAsset }
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const apiBase = (import.meta as any).env?.VITE_API_BASE_URL || '';
 
 // Some browsers/contexts禁用 localStorage 会导致 “Access to storage is not allowed”。
 // 提供一个安全的 storage 选择：localStorage -> sessionStorage -> 内存。
@@ -74,7 +75,48 @@ type HistoryRow = {
 
 export const isSupabaseConfigured = () => Boolean(supabase);
 
+// Helpers for backend API calls (Railway)
+const getAccessToken = async () => {
+    const auth = supabaseAuth();
+    if (!auth) return null;
+    const { data } = await auth.getSession();
+    return data.session?.access_token || null;
+};
+
+const apiRequest = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
+    if (!apiBase) throw new Error('API base not configured');
+    const token = await getAccessToken();
+    if (!token) throw new Error('No access token');
+    const resp = await fetch(`${apiBase}${path}`, {
+        ...options,
+        headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            ...(options.headers || {})
+        },
+    });
+    if (!resp.ok) {
+        const detail = await resp.text();
+        throw new Error(`API error ${resp.status}: ${detail}`);
+    }
+    return resp.json();
+};
+
 export const fetchAssets = async (): Promise<WorkflowAsset[]> => {
+    if (apiBase) {
+        const res = await apiRequest<{ data: AssetRow[] }>('/api/assets');
+        const data = res.data || [];
+        return data.map((row: AssetRow) => ({
+            id: row.id,
+            name: row.name,
+            tags: row.tags || [],
+            notes: row.notes || '',
+            nodes: row.nodes,
+            connections: row.connections,
+            visibility: row.visibility || 'public',
+            ownerId: row.owner_id
+        }));
+    }
     if (!supabase) return [];
     const { data, error } = await supabase.from(ASSET_TABLE).select('*').order('created_at', { ascending: false });
     if (error) throw error;
@@ -91,6 +133,22 @@ export const fetchAssets = async (): Promise<WorkflowAsset[]> => {
 };
 
 export const upsertAsset = async (asset: WorkflowAsset) => {
+    if (apiBase) {
+        await apiRequest('/api/assets', {
+            method: 'POST',
+            body: JSON.stringify({
+                id: asset.id,
+                name: asset.name,
+                tags: asset.tags,
+                notes: asset.notes,
+                nodes: asset.nodes,
+                connections: asset.connections,
+                visibility: asset.visibility || 'public',
+                owner_id: asset.ownerId
+            })
+        });
+        return;
+    }
     if (!supabase) return;
     const { error } = await supabase.from(ASSET_TABLE).upsert({
         id: asset.id,
@@ -106,12 +164,29 @@ export const upsertAsset = async (asset: WorkflowAsset) => {
 };
 
 export const deleteAsset = async (assetId: string) => {
+    if (apiBase) {
+        await apiRequest(`/api/assets/${assetId}`, { method: 'DELETE' });
+        return;
+    }
     if (!supabase) return;
     const { error } = await supabase.from(ASSET_TABLE).delete().eq('id', assetId);
     if (error) throw error;
 };
 
 export const fetchHistoryItems = async (): Promise<HistoryItem[]> => {
+    if (apiBase) {
+        const res = await apiRequest<{ data: HistoryRow[] }>('/api/history');
+        const data = res.data || [];
+        return data.map((row: HistoryRow) => ({
+            id: row.id,
+            timestamp: new Date(row.created_at),
+            image: row.image,
+            prompt: row.prompt,
+            context: row.context,
+            nodeName: row.node_name,
+            ownerId: row.owner_id,
+        }));
+    }
     if (!supabase) return [];
     const { data, error } = await supabase.from(HISTORY_TABLE).select('*').order('created_at', { ascending: false });
     if (error) throw error;
@@ -127,6 +202,21 @@ export const fetchHistoryItems = async (): Promise<HistoryItem[]> => {
 };
 
 export const insertHistoryItem = async (item: HistoryItem, ownerId?: string) => {
+    if (apiBase) {
+        await apiRequest('/api/history', {
+            method: 'POST',
+            body: JSON.stringify({
+                id: item.id,
+                image: item.image,
+                prompt: item.prompt,
+                context: item.context,
+                node_name: item.nodeName,
+                created_at: item.timestamp.toISOString(),
+                owner_id: ownerId ?? item.ownerId,
+            })
+        });
+        return;
+    }
     if (!supabase) return;
     const { error } = await supabase.from(HISTORY_TABLE).insert({
         id: item.id,
@@ -141,6 +231,10 @@ export const insertHistoryItem = async (item: HistoryItem, ownerId?: string) => 
 };
 
 export const removeHistoryItem = async (id: string, ownerId?: string) => {
+    if (apiBase) {
+        await apiRequest(`/api/history/${id}`, { method: 'DELETE' });
+        return;
+    }
     if (!supabase) return;
     const query = supabase.from(HISTORY_TABLE).delete().eq('id', id);
     const { error } = ownerId ? await query.eq('owner_id', ownerId) : await query;
@@ -148,6 +242,10 @@ export const removeHistoryItem = async (id: string, ownerId?: string) => {
 };
 
 export const clearHistoryItems = async (ownerId?: string) => {
+    if (apiBase) {
+        // For safety, only allow admin to clear via backend; caller controls.
+        return;
+    }
     if (!supabase) return;
     const query = supabase.from(HISTORY_TABLE).delete();
     const { error } = ownerId ? await query.eq('owner_id', ownerId) : await query;
@@ -163,6 +261,10 @@ type UserRow = {
 };
 
 export const fetchUsers = async (): Promise<{ name: string; password: string; id: string; }[]> => {
+    if (apiBase) {
+        const res = await apiRequest<{ users: any[] }>('/api/users');
+        return (res.users || []).map(u => ({ id: u.id, name: u.email, password: '', }));
+    }
     if (!supabase) return [];
     const { data, error } = await supabase.from(USER_TABLE).select('*').order('created_at', { ascending: true });
     if (error) throw error;
@@ -174,6 +276,13 @@ export const fetchUsers = async (): Promise<{ name: string; password: string; id
 };
 
 export const upsertUser = async (user: { id?: string; name: string; password: string; }) => {
+    if (apiBase) {
+        await apiRequest('/api/users', {
+            method: 'POST',
+            body: JSON.stringify({ email: user.name, password: user.password }),
+        });
+        return;
+    }
     if (!supabase) return;
     const payload = { id: user.id, name: user.name, password: user.password };
     const { error } = await supabase.from(USER_TABLE).upsert(payload);
@@ -181,6 +290,10 @@ export const upsertUser = async (user: { id?: string; name: string; password: st
 };
 
 export const deleteUser = async (id: string) => {
+    if (apiBase) {
+        await apiRequest(`/api/users/${id}`, { method: 'DELETE' });
+        return;
+    }
     if (!supabase) return;
     const { error } = await supabase.from(USER_TABLE).delete().eq('id', id);
     if (error) throw error;

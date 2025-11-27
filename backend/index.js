@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import { createClient } from '@supabase/supabase-js';
 
 dotenv.config();
+console.log('ENV check service_role prefix:', (SUPABASE_SERVICE_ROLE || '').slice(0, 10));
 
 const {
   SUPABASE_URL,
@@ -159,6 +160,7 @@ app.get('/api/users', authGuard, async (req, res) => {
     }));
     res.json({ users });
   } catch (err) {
+    console.error('list users error:', err);
     res.status(500).json({ error: 'Failed to list users', detail: err.message });
   }
 });
@@ -177,6 +179,7 @@ app.post('/api/users', authGuard, async (req, res) => {
     if (error) throw error;
     res.json({ user: { id: data.user.id, email: data.user.email, role } });
   } catch (err) {
+    console.error('create user error:', err);
     res.status(500).json({ error: 'Failed to create user', detail: err.message });
   }
 });
@@ -189,6 +192,7 @@ app.delete('/api/users/:id', authGuard, async (req, res) => {
     if (error) throw error;
     res.json({ ok: true });
   } catch (err) {
+    console.error('delete user error:', err);
     res.status(500).json({ error: 'Failed to delete user', detail: err.message });
   }
 });
