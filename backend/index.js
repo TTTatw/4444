@@ -488,4 +488,153 @@ app.get('/api/admin/logs', authGuard, async (req, res) => {
   }
 });
 
+// --- Proxy Generation Endpoint ---
+import { GoogleGenAI } from '@google/genai';
+
+const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+app.post('/api/generate', authGuard, async (req, res) => {
+  const { model = 'gemini-1.5-flash', prompt, image, systemInstruction } = req.body;
+  const userId = req.user.id;
+  const COST_PER_REQUEST = 10; // Define cost per request
+
+  try {
+    // 1. Check Balance
+    // 1. Check Balance
+    let { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('balance, status')
+      .eq('id', userId)
+      .single();
+
+    if (profileError && profileError.code !== 'PGRST116') throw profileError; // PGRST116 is "The result contains 0 rows"
+
+    if (!profile) {
+      // Auto-create profile if missing
+      console.log(`Profile missing for user ${userId}, creating one...`);
+      const { data: newProfile, error: createError } = await supabaseAdmin
+        .from('profiles')
+        .insert({
+          id: userId,
+          email: req.user.email, // Assuming email is in the token or we can fetch it. 
+          // Wait, req.user from authGuard usually has email? 
+          // Let's check authGuard middleware.
+          // Usually Supabase JWT has email.
+          role: 'user',
+          balance: 100,
+          status: 'active'
+        })
+        .select()
+        .single();
+
+      if (createError) throw new Error(`Failed to create profile: ${createError.message}`);
+      profile = newProfile;
+    }
+    if (profile.status !== 'active') return res.status(403).json({ error: 'Account not active' });
+    if (profile.balance < COST_PER_REQUEST) return res.status(402).json({ error: 'Insufficient balance' });
+
+    // 2. Call Google API
+    // Using @google/genai SDK (v0.1.0+)
+
+    // Prepare parts
+    const parts = [];
+    if (prompt) parts.push({ text: prompt });
+    if (image) {
+      // Frontend sends: { inlineData: { mimeType: ..., data: ... } }
+      // The SDK expects 'Part' objects.
+      parts.push(image);
+    }
+
+    // Model Mapping (Frontend names -> Official API names)
+    let targetModel = model;
+    if (model === 'gemini-3-pro-image-preview') {
+      targetModel = 'gemini-3-pro-image-preview';
+    } else if (model === 'gemini-2.5-flash-image') {
+      targetModel = 'gemini-2.5-flash-image';
+    } else if (model === 'gemini-3-pro-preview') {
+      targetModel = 'gemini-3-pro-preview';
+    } else if (model === 'gemini-2.5-flash') {
+      targetModel = 'gemini-2.5-flash';
+    }
+
+    const request = {
+      model: targetModel,
+      contents: { parts }
+    };
+
+    const result = await genAI.models.generateContent(request);
+
+    // DEBUG: Log the full result to see structure
+    console.log('--- DEBUG GENERATION RESULT ---');
+    console.log(JSON.stringify(result, null, 2));
+    console.log('--- DEBUG END ---');
+
+    let responseText = '';
+    let responseImage = null;
+
+    // Handle Image Response (Base64 Image)
+    // Check if model is an image model OR if response has inlineData
+    const isImageModel = targetModel.includes('image');
+
+    if (isImageModel) {
+      // Try to extract image
+      const imagePart = result.candidates?.[0]?.content?.parts?.[0];
+      if (imagePart && imagePart.inlineData && imagePart.inlineData.data) {
+        responseImage = imagePart.inlineData.data;
+        responseText = 'Generated image';
+      } else {
+        // Fallback: Check if there's text (maybe refusal or chat)
+        responseText = result.text || 'Image generation failed (No image data returned)';
+      }
+    } else {
+      // Handle Text Response
+      responseText = result.text;
+    }
+
+    // 3. Deduct Balance & Log Usage
+    const { error: updateError } = await supabaseAdmin
+      .from('profiles')
+      .update({ balance: profile.balance - COST_PER_REQUEST })
+      .eq('id', userId);
+
+    if (updateError) console.error('Failed to deduct balance', updateError);
+
+    await supabaseAdmin.from('usage_logs').insert({
+      user_id: userId,
+      provider: 'google',
+      model: targetModel,
+      resource_type: responseImage ? 'image' : 'text',
+      cost_credits: COST_PER_REQUEST,
+      tokens_input: 0,
+      tokens_output: 0,
+      status: 'success'
+    });
+
+    if (responseImage) {
+      res.json({ image: responseImage });
+    } else {
+      res.json({ text: responseText });
+    }
+
+  } catch (err) {
+    console.error('Generation failed:', err);
+    // Log failure
+    await supabaseAdmin.from('usage_logs').insert({
+      user_id: userId,
+      provider: 'google',
+      model: model,
+      resource_type: 'text',
+      cost_credits: 0,
+      status: 'failed',
+      error_message: err.message
+    });
+    res.status(500).json({ error: 'Generation failed', detail: err.message });
+  }
+});
+
+const port = process.env.PORT || 3001;
+app.listen(port, () => {
+  console.log(`Backend listening on :${port}`);
+});
+
 
