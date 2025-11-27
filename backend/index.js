@@ -14,6 +14,11 @@ const {
   ALLOW_ORIGIN = '*',
 } = process.env;
 
+console.log('--- DEBUG ENV START ---');
+console.log('SUPABASE_URL:', SUPABASE_URL);
+console.log('SUPABASE_SERVICE_ROLE (first 10):', SUPABASE_SERVICE_ROLE ? SUPABASE_SERVICE_ROLE.substring(0, 10) + '...' : 'MISSING');
+console.log('--- DEBUG ENV END ---');
+
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) {
   console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE in env');
   process.exit(1);

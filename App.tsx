@@ -195,7 +195,7 @@ const App: React.FC = () => {
 
         const previous = past[past.length - 1];
         const newPast = past.slice(0, past.length - 1);
-        
+
         setFuture(f => [{
             nodes: nodesRef.current,
             connections: connectionsRef.current,
@@ -847,12 +847,12 @@ const App: React.FC = () => {
 
             if (result.type === 'image') {
                 // Reset dimensions for new generated image to trigger auto-sizing
-                updateNodeData(nodeId, { 
-                    status: 'success', 
-                    inputImage: result.content, 
+                updateNodeData(nodeId, {
+                    status: 'success',
+                    inputImage: result.content,
                     content: 'Generated image',
                     width: undefined, // Force re-calculation of dimensions
-                    height: undefined 
+                    height: undefined
                 });
                 const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
                 const historyItem: HistoryItem = { id: `hist-${Date.now()}`, timestamp: new Date(), image: result.content, prompt: instructionToUse, context, nodeName: nodeToExecute.name, ownerId: currentUser.id };
@@ -896,7 +896,7 @@ const App: React.FC = () => {
         // 1. Initialize Topology
         const adj = new Map<string, string[]>();
         const inDegree = new Map<string, number>();
-        
+
         // Initialize data store for the run. 
         const executionData = new Map<string, Node>();
         nodesRef.current.forEach(node => {
@@ -904,21 +904,21 @@ const App: React.FC = () => {
             // Important: If a node has 'success' status or 'running', its content might be stale output from a previous run.
             // We should clear it for the execution snapshot unless it's a root node that was USER uploaded (status='idle').
             const isStaleOutput = (node.status === 'success' || node.status === 'running' || node.status === 'error');
-            
+
             const cleanNode = { ...node };
             if (isStaleOutput) {
                 // If it's a generated node (has inputs), or if it's a root node that ran previously, clear data.
                 // However, for root nodes, we must be careful.
                 if (isGenerated) {
-                     cleanNode.content = node.type === 'image' ? '' : '';
-                     cleanNode.inputImage = null;
+                    cleanNode.content = node.type === 'image' ? '' : '';
+                    cleanNode.inputImage = null;
                 } else {
                     // It's a root node. If it ran before (status=success), the inputImage currently holds the OUTPUT of that run.
                     // We DO NOT want to feed that output back in as input for a text-to-image gen.
                     // BUT, if it's an img2img workflow, maybe we do?
                     // Heuristic: If it has an instruction and is an image node, and status is success, assume previous run was T2I and clear.
                     if (node.type === 'image' && node.instruction) {
-                         cleanNode.inputImage = null;
+                        cleanNode.inputImage = null;
                     }
                 }
             }
@@ -967,7 +967,7 @@ const App: React.FC = () => {
             // We want to highlight ALL incoming connections to this node, even from outside the group
             const incomingConns = connectionsRef.current.filter(c => c.to === nodeId);
             const incomingConnIds = incomingConns.map(c => c.id);
-            
+
             if (incomingConnIds.length > 0) {
                 setActiveConnectionIds(prev => {
                     const next = new Set(prev);
@@ -999,10 +999,10 @@ const App: React.FC = () => {
                     const inputNodesData = incomingConns
                         .map(c => executionData.get(c.from))
                         .filter(n => n !== undefined) as Node[];
-                    
-                    const inputs = inputNodesData.map(n => ({ 
-                        type: n.type, 
-                        data: n.type === 'image' ? n.inputImage : n.content 
+
+                    const inputs = inputNodesData.map(n => ({
+                        type: n.type,
+                        data: n.type === 'image' ? n.inputImage : n.content
                     }));
 
                     // Self-image input (if it's a root node effectively for this operation or purely editing)
@@ -1026,12 +1026,12 @@ const App: React.FC = () => {
                         updatedNode.content = 'Generated image';
                         // Store history item
                         const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
-                        const histItem: HistoryItem = { 
-                            id: `hist-${Date.now()}-${nodeId}`, 
-                            timestamp: new Date(), 
-                            image: result.content, 
-                            prompt: currentNodeData.instruction, 
-                            context, 
+                        const histItem: HistoryItem = {
+                            id: `hist-${Date.now()}-${nodeId}`,
+                            timestamp: new Date(),
+                            image: result.content,
+                            prompt: currentNodeData.instruction,
+                            context,
                             nodeName: currentNodeData.name,
                             ownerId: currentUser.id,
                         };
@@ -1046,12 +1046,12 @@ const App: React.FC = () => {
                     executionData.set(nodeId, updatedNode);
 
                     // Update UI
-                    setNodes(ns => ns.map(n => n.id === nodeId ? { 
-                        ...n, 
-                        ...updatedNode, 
-                        status: 'success', 
-                        width: undefined, 
-                        height: undefined 
+                    setNodes(ns => ns.map(n => n.id === nodeId ? {
+                        ...n,
+                        ...updatedNode,
+                        status: 'success',
+                        width: undefined,
+                        height: undefined
                     } : n));
                 }
 
@@ -1078,13 +1078,13 @@ const App: React.FC = () => {
                         return next;
                     });
                 }
-                
+
                 if (newHistoryItems.length > 0) {
                     setHistory(h => [...newHistoryItems.filter(item => !h.some(existing => existing.id === item.id)).reverse(), ...h]);
                     if (supabaseEnabled) {
                         newHistoryItems.forEach(item => insertHistoryItem({ ...item, ownerId: currentUser.id }, currentUser.id).catch(err => console.error("Supabase history insert failed:", err)));
                     }
-                    newHistoryItems.length = 0; 
+                    newHistoryItems.length = 0;
                 }
             }
         };
@@ -1411,7 +1411,7 @@ const App: React.FC = () => {
             // --- DELETE ---
             if (!isTyping && (e.key === 'Backspace' || e.key === 'Delete')) {
                 const selectedNodeIds = new Set(nodesRef.current.filter(n => n.selected).map(n => n.id));
-                
+
                 // Should we record history? Yes if we are about to delete something.
                 if (selectedNodeIds.size > 0 || selectedGroups.length > 0 || selectedConnectionId) {
                     recordHistory();
@@ -1426,11 +1426,11 @@ const App: React.FC = () => {
                 }
                 if (selectedGroups.length > 0) {
                     // ungroupSelectedNodes internally records history if groups exist
-                    ungroupSelectedNodes(); 
+                    ungroupSelectedNodes();
                 }
                 if (selectedConnectionId) {
-                     setConnections(cs => cs.filter(c => c.id !== selectedConnectionId));
-                     setSelectedConnectionId(null);
+                    setConnections(cs => cs.filter(c => c.id !== selectedConnectionId));
+                    setSelectedConnectionId(null);
                 }
             }
 
@@ -1438,19 +1438,19 @@ const App: React.FC = () => {
             if (!isTyping && e.ctrlKey && e.key === 'c') {
                 const selected = nodesRef.current.filter(n => n.selected);
                 if (selected.length === 0) return;
-                
+
                 // Also copy groups if they are selected or if all their nodes are selected
                 const selectedGroupIds = new Set(groupsRef.current.filter(g => g.selected).map(g => g.id));
                 // If all nodes of a group are selected, implicitly copy the group too? 
                 // For now, let's stick to explicit selection or just nodes. 
                 // The `selectedNodes` logic handles the content.
-                
+
                 const nodesToCopy = selected;
                 const nodeIds = new Set(nodesToCopy.map(n => n.id));
-                
+
                 // Copy connections between selected nodes
                 const connectionsToCopy = connectionsRef.current.filter(c => nodeIds.has(c.from) && nodeIds.has(c.to));
-                
+
                 // Copy groups if selected
                 const groupsToCopy = groupsRef.current.filter(g => g.selected);
 
@@ -1470,7 +1470,7 @@ const App: React.FC = () => {
                 deselectAll();
 
                 const { nodes: cpNodes, connections: cpConnections, groups: cpGroups } = clipboard.current;
-                
+
                 // Offset for paste
                 const OFFSET = 50;
                 const idMap = new Map<string, string>();
@@ -1517,14 +1517,14 @@ const App: React.FC = () => {
                 setGroups(gs => [...gs, ...newGroups]);
             }
 
-             // --- UNDO (Ctrl+Z) ---
+            // --- UNDO (Ctrl+Z) ---
             if (!isTyping && e.ctrlKey && e.key === 'z') {
                 e.preventDefault();
                 undo();
             }
 
             // --- REDO (Ctrl+Y or Ctrl+Shift+Z) ---
-            if (!isTyping && ( (e.ctrlKey && e.key === 'y') || (e.ctrlKey && e.shiftKey && e.key === 'z') )) {
+            if (!isTyping && ((e.ctrlKey && e.key === 'y') || (e.ctrlKey && e.shiftKey && e.key === 'z'))) {
                 e.preventDefault();
                 redo();
             }
@@ -1613,7 +1613,15 @@ const App: React.FC = () => {
 
     const handleLogin = async (register = false) => {
         const auth = supabaseAuth();
-        if (!auth) return;
+        if (!auth) {
+            // Offline/Local mode fallback
+            console.warn("Supabase not configured, using local offline mode.");
+            setCurrentUser({ role: 'admin', name: loginName || 'Local User', id: 'local-user' });
+            setIsAuthModalOpen(false);
+            setToast('已进入离线模式');
+            setTimeout(() => setToast(null), 2000);
+            return;
+        }
         try {
             if (register) {
                 const { error } = await auth.signUp({ email: loginName, password: loginPassword });
@@ -1767,7 +1775,7 @@ const App: React.FC = () => {
             />
 
             {toast && createPortal(
-                <div className="fixed top-8 left-1/2 -translate-x-1/2 glass-panel text-white px-6 py-3 rounded-full shadow-[0_0_30px_rgba(99,102,241,0.3)] z-[9997] toast-animate border border-white/10 flex items-center gap-2">
+                <div className="fixed top-8 left-1/2 -translate-x-1/2 glass-panel text-white px-6 py-3 rounded-full shadow-[0_0_30px_rgba(99,102,241,0.3)] z-[10000] toast-animate border border-white/10 flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full bg-neon-blue animate-pulse"></div>
                     {toast}
                 </div>,
@@ -1808,14 +1816,14 @@ const App: React.FC = () => {
                 </svg>
 
                 {groups.map(group => (
-                <GroupComponent
-                    key={group.id} group={group}
-                    onRunWorkflow={runGroupWorkflow}
-                    onMouseDown={handleGroupMouseDown}
-                    onSaveAsset={(groupId) => { setGroupToSave(groups.find(g => g.id === groupId) || null); setIsSaveAssetModalOpen(true); }}
-                    onUpdateName={(id, name) => setGroups(gs => gs.map(g => g.id === id ? { ...g, name } : g))}
-                />
-            ))}
+                    <GroupComponent
+                        key={group.id} group={group}
+                        onRunWorkflow={runGroupWorkflow}
+                        onMouseDown={handleGroupMouseDown}
+                        onSaveAsset={(groupId) => { setGroupToSave(groups.find(g => g.id === groupId) || null); setIsSaveAssetModalOpen(true); }}
+                        onUpdateName={(id, name) => setGroups(gs => gs.map(g => g.id === id ? { ...g, name } : g))}
+                    />
+                ))}
 
                 {nodes.map(node => (
                     <NodeComponent

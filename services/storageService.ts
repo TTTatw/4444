@@ -163,27 +163,61 @@ type UserRow = {
 };
 
 export const fetchUsers = async (): Promise<{ name: string; password: string; id: string; }[]> => {
-    if (!supabase) return [];
-    const { data, error } = await supabase.from(USER_TABLE).select('*').order('created_at', { ascending: true });
-    if (error) throw error;
-    return (data || []).map((row: UserRow) => ({
-        id: row.id,
-        name: row.name,
-        password: row.password,
-    }));
+    const session = await supabase?.auth.getSession();
+    const token = session?.data.session?.access_token;
+    if (!token) return [];
+
+    const response = await fetch('https://4444-production.up.railway.app/api/users', {
+        headers: {
+            'Authorization': `Bearer ${token}`
+        }
+    });
+
+    if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Failed to list users');
+    }
+
+    const data = await response.json();
+    return data.users;
 };
 
 export const upsertUser = async (user: { id?: string; name: string; password: string; }) => {
-    if (!supabase) return;
-    const payload = { id: user.id, name: user.name, password: user.password };
-    const { error } = await supabase.from(USER_TABLE).upsert(payload);
-    if (error) throw error;
+    const session = await supabase?.auth.getSession();
+    const token = session?.data.session?.access_token;
+    if (!token) return;
+
+    const response = await fetch('https://4444-production.up.railway.app/api/users', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ email: user.name, password: user.password, role: 'user' })
+    });
+
+    if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Failed to create user');
+    }
 };
 
 export const deleteUser = async (id: string) => {
-    if (!supabase) return;
-    const { error } = await supabase.from(USER_TABLE).delete().eq('id', id);
-    if (error) throw error;
+    const session = await supabase?.auth.getSession();
+    const token = session?.data.session?.access_token;
+    if (!token) return;
+
+    const response = await fetch(`https://4444-production.up.railway.app/api/users/${id}`, {
+        method: 'DELETE',
+        headers: {
+            'Authorization': `Bearer ${token}`
+        }
+    });
+
+    if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Failed to delete user');
+    }
 };
 
 export const getSupabaseClient = () => supabase;
