@@ -97,6 +97,9 @@ const App: React.FC = () => {
     const [isAssetLibraryOpen, setIsAssetLibraryOpen] = useState(false);
     const [isSaveAssetModalOpen, setIsSaveAssetModalOpen] = useState(false);
     const [groupToSave, setGroupToSave] = useState<Group | null>(null);
+    const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+    const [newUserEmail, setNewUserEmail] = useState('');
+    const [newUserPassword, setNewUserPassword] = useState('');
 
     // Refs
     const canvasRef = useRef<HTMLDivElement>(null);
@@ -1192,8 +1195,11 @@ const App: React.FC = () => {
             if (session?.user) {
                 const role = deriveRole(session.user.email || '', (session.user.user_metadata as any)?.role);
                 setCurrentUser({ role, name: session.user.email || 'User', id: session.user.id });
+                setIsAuthModalOpen(false); // 登录后自动关闭弹窗
             } else {
                 setCurrentUser({ role: 'guest', name: 'Guest' });
+                setIsAuthModalOpen(true); // 未登录时显示登录
+                setIsAccountModalOpen(false);
             }
         });
         return () => { sub?.subscription.unsubscribe(); };
@@ -1618,11 +1624,31 @@ const App: React.FC = () => {
             }
             const { data, error } = await auth.signInWithPassword({ email: loginName, password: loginPassword });
             if (error || !data.session) throw error || new Error('No session');
-            const role = (data.session.user.user_metadata as any)?.role === 'admin' ? 'admin' : 'user';
+            const role = deriveRole(data.session.user.email || '', (data.session.user.user_metadata as any)?.role);
             setCurrentUser({ role, name: data.session.user.email || 'User', id: data.session.user.id });
             setIsAuthModalOpen(false);
         } catch (error) {
             alert("登录失败，请检查邮箱/密码");
+        }
+    };
+
+    // Admin create new user via Supabase Auth (email/password)
+    const handleCreateUser = async () => {
+        const auth = supabaseAuth();
+        if (!auth) return;
+        if (!newUserEmail || !newUserPassword) {
+            alert('请输入授权邮箱和密码');
+            return;
+        }
+        try {
+            const { error } = await auth.signUp({ email: newUserEmail.trim(), password: newUserPassword });
+            if (error) throw error;
+            setToast('创建授权账号成功');
+            setNewUserEmail('');
+            setNewUserPassword('');
+            setTimeout(() => setToast(null), 2000);
+        } catch (err) {
+            alert('创建授权账号失败：' + (err as Error).message);
         }
     };
 
@@ -1913,7 +1939,7 @@ const App: React.FC = () => {
                 onOpenLibrary={() => setIsAssetLibraryOpen(true)}
                 onOpenHistory={() => setIsHistoryModalOpen(true)}
                 onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
-                onOpenAuthModal={() => setIsAuthModalOpen(true)}
+                onOpenAuthModal={() => setIsAccountModalOpen(true)}
                 history={visibleHistory}
                 onSelectHistory={setSelectedHistoryItem}
                 onClearHistory={handleClearHistory}
@@ -1952,45 +1978,56 @@ const App: React.FC = () => {
                 )
             )}
 
-            { (isAuthModalOpen || currentUser.role === 'guest') && (
-                createPortal(
-                    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsAuthModalOpen(false)}>
-                        <div className="bg-[#1f2937] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-2xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
-                            <div className="flex items-center justify-between">
-                                <h2 className="text-lg font-bold text-white">Login / Manage Access</h2>
-                                <button onClick={() => setIsAuthModalOpen(false)} className="text-slate-400 hover:text-white">&times;</button>
+            {isAccountModalOpen && currentUser.role !== 'guest' && createPortal(
+                <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsAccountModalOpen(false)}>
+                    <div className="bg-[#0f1625] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-3xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="px-3 py-1 rounded-full bg-slate-800 text-slate-200 text-sm">账户信息</div>
+                                <div className="px-2 py-1 rounded-full text-xs border border-slate-600 text-slate-300">
+                                    {currentUser.role === 'admin' ? '管理员' : '授权用户'}
+                                </div>
                             </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                            <button onClick={() => setIsAccountModalOpen(false)} className="text-slate-400 hover:text-white text-lg">&times;</button>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="space-y-3">
+                                <p className="text-sm text-slate-300">邮箱：{currentUser.name}</p>
+                                <p className="text-sm text-slate-300">角色：{currentUser.role}</p>
+                            </div>
+                            {currentUser.role === 'admin' && (
                                 <div className="space-y-3">
-                                    <h3 className="text-sm font-semibold text-slate-200">邮箱登录</h3>
+                                    <h3 className="text-sm font-semibold text-slate-200">授权账号</h3>
                                     <input
                                         type="email"
-                                        value={loginName}
-                                        onChange={e => setLoginName(e.target.value)}
-                                        placeholder="Email"
+                                        value={newUserEmail}
+                                        onChange={e => setNewUserEmail(e.target.value)}
+                                        placeholder="授权邮箱（Supabase 要求有效邮箱）"
                                         className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                     />
                                     <input
                                         type="password"
-                                        value={loginPassword}
-                                        onChange={e => setLoginPassword(e.target.value)}
-                                        placeholder="Password"
+                                        value={newUserPassword}
+                                        onChange={e => setNewUserPassword(e.target.value)}
+                                        placeholder="设置密码"
                                         className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                     />
-                                    <div className="flex items-center justify-between">
-                                        <div className="text-xs text-slate-400">使用 Supabase Auth 登录</div>
-                                        <div className="flex space-x-2">
-                                            <button onClick={() => handleLogin()} className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 text-sm">登录</button>
-                                            <button onClick={() => handleLogin(true)} className="px-3 py-2 rounded-lg bg-slate-600 text-white hover:bg-slate-500 text-sm">注册</button>
-                                        </div>
-                                    </div>
-                                    <p className="text-xs text-slate-400">当前：{currentUser.name} ({currentUser.role})</p>
+                                    <button
+                                        onClick={handleCreateUser}
+                                        className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 text-sm w-fit"
+                                    >
+                                        创建授权账号
+                                    </button>
+                                    <p className="text-xs text-slate-400 leading-5">
+                                        创建后用户将直接写入 Supabase Auth，请确保邮箱/密码有效。<br />
+                                        如果需要查看/删除授权用户，可在 Supabase 控制台的 Authentication → Users 中操作（支持备注）。
+                                    </p>
                                 </div>
-                            </div>
+                            )}
                         </div>
-                    </div>,
-                    document.body
-                )
+                    </div>
+                </div>,
+                document.body
             )}
 
         </div>
