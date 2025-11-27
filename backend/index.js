@@ -16,7 +16,7 @@ const {
 
 console.log('--- DEBUG ENV START ---');
 console.log('SUPABASE_URL:', SUPABASE_URL);
-console.log('SUPABASE_SERVICE_ROLE (first 10):', SUPABASE_SERVICE_ROLE ? SUPABASE_SERVICE_ROLE.substring(0, 10) + '...' : 'MISSING');
+console.log('SUPABASE_SERVICE_ROLE (LAST 10):', SUPABASE_SERVICE_ROLE ? '...' + SUPABASE_SERVICE_ROLE.slice(-10) : 'MISSING');
 console.log('--- DEBUG ENV END ---');
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) {
