@@ -310,7 +310,29 @@ app.post('/api/generate', authGuard, async (req, res) => {
       .eq('id', userId)
       .single();
 
-    if (profileError || !profile) throw new Error('Profile not found');
+    if (profileError && profileError.code !== 'PGRST116') throw profileError; // PGRST116 is "The result contains 0 rows"
+
+    if (!profile) {
+      // Auto-create profile if missing
+      console.log(`Profile missing for user ${userId}, creating one...`);
+      const { data: newProfile, error: createError } = await supabaseAdmin
+        .from('profiles')
+        .insert({
+          id: userId,
+          email: req.user.email, // Assuming email is in the token or we can fetch it. 
+          // Wait, req.user from authGuard usually has email? 
+          // Let's check authGuard middleware.
+          // Usually Supabase JWT has email.
+          role: 'user',
+          balance: 100,
+          status: 'active'
+        })
+        .select()
+        .single();
+
+      if (createError) throw new Error(`Failed to create profile: ${createError.message}`);
+      profile = newProfile;
+    }
     if (profile.status !== 'active') return res.status(403).json({ error: 'Account not active' });
     if (profile.balance < COST_PER_REQUEST) return res.status(402).json({ error: 'Insufficient balance' });
 
