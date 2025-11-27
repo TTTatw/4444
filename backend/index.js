@@ -340,50 +340,152 @@ app.post('/api/generate', authGuard, async (req, res) => {
 
     // 2. Call Google API
     // Using @google/genai SDK (v0.1.0+)
-
-    // Prepare parts
-    const parts = [];
-    if (prompt) parts.push({ text: prompt });
-    if (image) {
-      // Assuming image is passed as a Part object or similar structure from frontend
-      .eq('id', userId);
-
-      if (updateError) console.error('Failed to deduct balance', updateError);
-
-      await supabaseAdmin.from('usage_logs').insert({
-        user_id: userId,
-        provider: 'google',
-        model: targetModel,
-        resource_type: responseImage ? 'image' : 'text',
-        cost_credits: COST_PER_REQUEST,
-        tokens_input: 0,
-        tokens_output: 0,
-        status: 'success'
-      });
-
-      if (responseImage) {
-        res.json({ image: responseImage });
-      } else {
-        res.json({ text: responseText });
-      }
-
-    } catch (err) {
-      console.error('Generation failed:', err);
-      // Log failure
-      await supabaseAdmin.from('usage_logs').insert({
-        user_id: userId,
-        provider: 'google',
-        model: model,
-        resource_type: 'text',
-        cost_credits: 0,
-        status: 'failed',
-        error_message: err.message
-      });
-      res.status(500).json({ error: 'Generation failed', detail: err.message });
-    }
-  });
-
-const port = process.env.PORT || 3001;
-app.listen(port, () => {
-  console.log(`Backend listening on :${port}`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete history', detail: err.message });
+  }
 });
+
+// Admin: list users (enhanced with profile data)
+app.get('/api/users', authGuard, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  try {
+    // 1. Fetch Auth Users
+    const { data: { users }, error: authError } = await supabaseAdmin.auth.admin.listUsers();
+    if (authError) throw authError;
+
+    // 2. Fetch Profiles
+    const userIds = users.map(u => u.id);
+    const { data: profiles, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('id, balance, status, total_spent')
+      .in('id', userIds);
+
+    if (profileError) throw profileError;
+
+    // 3. Merge Data
+    const profileMap = new Map(profiles.map(p => [p.id, p]));
+    const result = users.map(u => {
+      const profile = profileMap.get(u.id) || {};
+      return {
+        id: u.id,
+        email: u.email,
+        role: u.user_metadata?.role || 'user',
+        created_at: u.created_at,
+        balance: profile.balance || 0,
+        status: profile.status || 'active',
+        total_spent: profile.total_spent || 0
+      };
+    });
+
+    res.json({ users: result });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to list users', detail: err.message });
+  }
+});
+
+// Admin: Update User (Balance/Status)
+app.patch('/api/admin/users/:id', authGuard, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  const { balance, status } = req.body;
+  try {
+    const updates = {};
+    if (balance !== undefined) updates.balance = balance;
+    if (status !== undefined) updates.status = status;
+
+    const { error } = await supabaseAdmin
+      .from('profiles')
+      .update(updates)
+      .eq('id', req.params.id);
+
+    if (error) throw error;
+
+    // If banning, also ban in Auth (optional, but good practice)
+    if (status === 'banned') {
+      await supabaseAdmin.auth.admin.updateUserById(req.params.id, { ban_duration: '876000h' }); // 100 years
+    } else if (status === 'active') {
+      await supabaseAdmin.auth.admin.updateUserById(req.params.id, { ban_duration: 'none' });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update user', detail: err.message });
+  }
+});
+
+// Admin: System Stats
+app.get('/api/admin/stats', authGuard, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  try {
+    // Total Users
+    const { count: userCount, error: userError } = await supabaseAdmin
+      .from('profiles')
+      .select('*', { count: 'exact', head: true });
+
+    if (userError) throw userError;
+
+    // Total Revenue (Credits Consumed)
+    // Note: Summing large tables can be slow. For now it's fine.
+    const { data: usageData, error: usageError } = await supabaseAdmin
+      .from('usage_logs')
+      .select('cost_credits');
+
+    if (usageError) throw usageError;
+    const totalCredits = usageData.reduce((sum, row) => sum + (row.cost_credits || 0), 0);
+
+    // Active Users (Last 24h)
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { count: activeCount, error: activeError } = await supabaseAdmin
+      .from('usage_logs')
+      .select('user_id', { count: 'exact', head: true }) // distinct is harder with Supabase API directly in one go for count
+      .gt('created_at', oneDayAgo);
+    // distinct count approximation or raw query needed for exact distinct. 
+    // For now, let's just count total requests in 24h as "Activity Level" or fetch unique IDs in code if small.
+
+    // Better approach for Active Users:
+    const { data: activeUsersData } = await supabaseAdmin
+      .from('usage_logs')
+      .select('user_id')
+      .gt('created_at', oneDayAgo);
+
+    const activeUsers = new Set(activeUsersData?.map(u => u.user_id)).size;
+
+    res.json({
+      totalUsers: userCount,
+      totalCreditsConsumed: totalCredits,
+      activeUsers24h: activeUsers
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch stats', detail: err.message });
+  }
+});
+
+// Admin: Usage Logs
+app.get('/api/admin/logs', authGuard, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  try {
+    const { page = 1, pageSize = 50 } = req.query;
+    const from = (page - 1) * pageSize;
+    const to = from + Number(pageSize) - 1;
+
+    const { data, error, count } = await supabaseAdmin
+      .from('usage_logs')
+      .select('*, profiles(email)', { count: 'exact' }) // Join with profiles to get email
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (error) throw error;
+
+    // Flatten email
+    const flatData = data.map(row => ({
+      ...row,
+      user_email: row.profiles?.email || 'Unknown'
+    }));
+
+    res.json({ data: flatData, count });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch logs', detail: err.message });
+  }
+});
+
+
