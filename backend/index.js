@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import { createClient } from '@supabase/supabase-js';
+import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
 
@@ -12,12 +13,13 @@ const {
   JWT_SECRET = 'dev-secret',
   APP_ADMIN_EMAILS = '',
   ALLOW_ORIGIN = '*',
+  GEMINI_API_KEY,
 } = process.env;
 
 console.log('--- DEBUG ENV START ---');
 console.log('SUPABASE_URL:', SUPABASE_URL);
 console.log('SUPABASE_SERVICE_ROLE (LAST 10):', SUPABASE_SERVICE_ROLE ? '...' + SUPABASE_SERVICE_ROLE.slice(-10) : 'MISSING');
-console.log('GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? 'SET (Starts with ' + process.env.GEMINI_API_KEY.substring(0, 4) + '...)' : 'MISSING');
+console.log('GEMINI_API_KEY:', GEMINI_API_KEY ? 'SET (Starts with ' + GEMINI_API_KEY.substring(0, 4) + '...)' : 'MISSING');
 console.log('--- DEBUG ENV END ---');
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) {
@@ -29,6 +31,9 @@ const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE);
 const adminEmailSet = new Set(
   APP_ADMIN_EMAILS.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
 );
+
+// Initialize Gemini Client
+const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 const app = express();
 app.use(cors({ origin: ALLOW_ORIGIN === '*' ? true : ALLOW_ORIGIN.split(',').map((s) => s.trim()), credentials: true }));
@@ -230,7 +235,6 @@ app.get('/api/admin/stats', authGuard, async (req, res) => {
     if (userError) throw userError;
 
     // Total Revenue (Credits Consumed)
-    // Note: Summing large tables can be slow. For now it's fine.
     const { data: usageData, error: usageError } = await supabaseAdmin
       .from('usage_logs')
       .select('cost_credits');
@@ -240,14 +244,6 @@ app.get('/api/admin/stats', authGuard, async (req, res) => {
 
     // Active Users (Last 24h)
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const { count: activeCount, error: activeError } = await supabaseAdmin
-      .from('usage_logs')
-      .select('user_id', { count: 'exact', head: true }) // distinct is harder with Supabase API directly in one go for count
-      .gt('created_at', oneDayAgo);
-    // distinct count approximation or raw query needed for exact distinct. 
-    // For now, let's just count total requests in 24h as "Activity Level" or fetch unique IDs in code if small.
-
-    // Better approach for Active Users:
     const { data: activeUsersData } = await supabaseAdmin
       .from('usage_logs')
       .select('user_id')
@@ -294,10 +290,6 @@ app.get('/api/admin/logs', authGuard, async (req, res) => {
 });
 
 // --- Proxy Generation Endpoint ---
-import { GoogleGenAI } from '@google/genai';
-
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
 app.post('/api/generate', authGuard, async (req, res) => {
   const { model = 'gemini-1.5-flash', prompt, image, systemInstruction } = req.body;
   const userId = req.user.id;
@@ -305,14 +297,13 @@ app.post('/api/generate', authGuard, async (req, res) => {
 
   try {
     // 1. Check Balance
-    // 1. Check Balance
     let { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('balance, status')
       .eq('id', userId)
       .single();
 
-    if (profileError && profileError.code !== 'PGRST116') throw profileError; // PGRST116 is "The result contains 0 rows"
+    if (profileError && profileError.code !== 'PGRST116') throw profileError;
 
     if (!profile) {
       // Auto-create profile if missing
@@ -321,10 +312,7 @@ app.post('/api/generate', authGuard, async (req, res) => {
         .from('profiles')
         .insert({
           id: userId,
-          email: req.user.email, // Assuming email is in the token or we can fetch it. 
-          // Wait, req.user from authGuard usually has email? 
-          // Let's check authGuard middleware.
-          // Usually Supabase JWT has email.
+          email: req.user.email,
           role: 'user',
           balance: 100,
           status: 'active'
@@ -339,209 +327,9 @@ app.post('/api/generate', authGuard, async (req, res) => {
     if (profile.balance < COST_PER_REQUEST) return res.status(402).json({ error: 'Insufficient balance' });
 
     // 2. Call Google API
-    // Using @google/genai SDK (v0.1.0+)
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to delete history', detail: err.message });
-  }
-});
-
-// Admin: list users (enhanced with profile data)
-app.get('/api/users', authGuard, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
-  try {
-    // 1. Fetch Auth Users
-    const { data: { users }, error: authError } = await supabaseAdmin.auth.admin.listUsers();
-    if (authError) throw authError;
-
-    // 2. Fetch Profiles
-    const userIds = users.map(u => u.id);
-    const { data: profiles, error: profileError } = await supabaseAdmin
-      .from('profiles')
-      .select('id, balance, status, total_spent')
-      .in('id', userIds);
-
-    if (profileError) throw profileError;
-
-    // 3. Merge Data
-    const profileMap = new Map(profiles.map(p => [p.id, p]));
-    const result = users.map(u => {
-      const profile = profileMap.get(u.id) || {};
-      return {
-        id: u.id,
-        email: u.email,
-        role: u.user_metadata?.role || 'user',
-        created_at: u.created_at,
-        balance: profile.balance || 0,
-        status: profile.status || 'active',
-        total_spent: profile.total_spent || 0
-      };
-    });
-
-    res.json({ users: result });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to list users', detail: err.message });
-  }
-});
-
-// Admin: Update User (Balance/Status)
-app.patch('/api/admin/users/:id', authGuard, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
-  const { balance, status } = req.body;
-  try {
-    const updates = {};
-    if (balance !== undefined) updates.balance = balance;
-    if (status !== undefined) updates.status = status;
-
-    const { error } = await supabaseAdmin
-      .from('profiles')
-      .update(updates)
-      .eq('id', req.params.id);
-
-    if (error) throw error;
-
-    // If banning, also ban in Auth (optional, but good practice)
-    if (status === 'banned') {
-      await supabaseAdmin.auth.admin.updateUserById(req.params.id, { ban_duration: '876000h' }); // 100 years
-    } else if (status === 'active') {
-      await supabaseAdmin.auth.admin.updateUserById(req.params.id, { ban_duration: 'none' });
-    }
-
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to update user', detail: err.message });
-  }
-});
-
-// Admin: System Stats
-app.get('/api/admin/stats', authGuard, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
-  try {
-    // Total Users
-    const { count: userCount, error: userError } = await supabaseAdmin
-      .from('profiles')
-      .select('*', { count: 'exact', head: true });
-
-    if (userError) throw userError;
-
-    // Total Revenue (Credits Consumed)
-    // Note: Summing large tables can be slow. For now it's fine.
-    const { data: usageData, error: usageError } = await supabaseAdmin
-      .from('usage_logs')
-      .select('cost_credits');
-
-    if (usageError) throw usageError;
-    const totalCredits = usageData.reduce((sum, row) => sum + (row.cost_credits || 0), 0);
-
-    // Active Users (Last 24h)
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const { count: activeCount, error: activeError } = await supabaseAdmin
-      .from('usage_logs')
-      .select('user_id', { count: 'exact', head: true }) // distinct is harder with Supabase API directly in one go for count
-      .gt('created_at', oneDayAgo);
-    // distinct count approximation or raw query needed for exact distinct. 
-    // For now, let's just count total requests in 24h as "Activity Level" or fetch unique IDs in code if small.
-
-    // Better approach for Active Users:
-    const { data: activeUsersData } = await supabaseAdmin
-      .from('usage_logs')
-      .select('user_id')
-      .gt('created_at', oneDayAgo);
-
-    const activeUsers = new Set(activeUsersData?.map(u => u.user_id)).size;
-
-    res.json({
-      totalUsers: userCount,
-      totalCreditsConsumed: totalCredits,
-      activeUsers24h: activeUsers
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch stats', detail: err.message });
-  }
-});
-
-// Admin: Usage Logs
-app.get('/api/admin/logs', authGuard, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
-  try {
-    const { page = 1, pageSize = 50 } = req.query;
-    const from = (page - 1) * pageSize;
-    const to = from + Number(pageSize) - 1;
-
-    const { data, error, count } = await supabaseAdmin
-      .from('usage_logs')
-      .select('*, profiles(email)', { count: 'exact' }) // Join with profiles to get email
-      .order('created_at', { ascending: false })
-      .range(from, to);
-
-    if (error) throw error;
-
-    // Flatten email
-    const flatData = data.map(row => ({
-      ...row,
-      user_email: row.profiles?.email || 'Unknown'
-    }));
-
-    res.json({ data: flatData, count });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch logs', detail: err.message });
-  }
-});
-
-// --- Proxy Generation Endpoint ---
-import { GoogleGenAI } from '@google/genai';
-
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
-app.post('/api/generate', authGuard, async (req, res) => {
-  const { model = 'gemini-1.5-flash', prompt, image, systemInstruction } = req.body;
-  const userId = req.user.id;
-  const COST_PER_REQUEST = 10; // Define cost per request
-
-  try {
-    // 1. Check Balance
-    // 1. Check Balance
-    let { data: profile, error: profileError } = await supabaseAdmin
-      .from('profiles')
-      .select('balance, status')
-      .eq('id', userId)
-      .single();
-
-    if (profileError && profileError.code !== 'PGRST116') throw profileError; // PGRST116 is "The result contains 0 rows"
-
-    if (!profile) {
-      // Auto-create profile if missing
-      console.log(`Profile missing for user ${userId}, creating one...`);
-      const { data: newProfile, error: createError } = await supabaseAdmin
-        .from('profiles')
-        .insert({
-          id: userId,
-          email: req.user.email, // Assuming email is in the token or we can fetch it. 
-          // Wait, req.user from authGuard usually has email? 
-          // Let's check authGuard middleware.
-          // Usually Supabase JWT has email.
-          role: 'user',
-          balance: 100,
-          status: 'active'
-        })
-        .select()
-        .single();
-
-      if (createError) throw new Error(`Failed to create profile: ${createError.message}`);
-      profile = newProfile;
-    }
-    if (profile.status !== 'active') return res.status(403).json({ error: 'Account not active' });
-    if (profile.balance < COST_PER_REQUEST) return res.status(402).json({ error: 'Insufficient balance' });
-
-    // 2. Call Google API
-    // Using @google/genai SDK (v0.1.0+)
-
-    // Prepare parts
     const parts = [];
     if (prompt) parts.push({ text: prompt });
     if (image) {
-      // Frontend sends: { inlineData: { mimeType: ..., data: ... } }
-      // The SDK expects 'Part' objects.
       parts.push(image);
     }
 
@@ -573,21 +361,17 @@ app.post('/api/generate', authGuard, async (req, res) => {
     let responseImage = null;
 
     // Handle Image Response (Base64 Image)
-    // Check if model is an image model OR if response has inlineData
     const isImageModel = targetModel.includes('image');
 
     if (isImageModel) {
-      // Try to extract image
       const imagePart = result.candidates?.[0]?.content?.parts?.[0];
       if (imagePart && imagePart.inlineData && imagePart.inlineData.data) {
         responseImage = imagePart.inlineData.data;
         responseText = 'Generated image';
       } else {
-        // Fallback: Check if there's text (maybe refusal or chat)
         responseText = result.text || 'Image generation failed (No image data returned)';
       }
     } else {
-      // Handle Text Response
       responseText = result.text;
     }
 
@@ -618,7 +402,6 @@ app.post('/api/generate', authGuard, async (req, res) => {
 
   } catch (err) {
     console.error('Generation failed:', err);
-    // Log failure
     await supabaseAdmin.from('usage_logs').insert({
       user_id: userId,
       provider: 'google',
@@ -636,5 +419,3 @@ const port = process.env.PORT || 3001;
 app.listen(port, () => {
   console.log(`Backend listening on :${port}`);
 });
-
-
