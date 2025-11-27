@@ -120,34 +120,11 @@ export const runNode = async (
         const data = await response.json();
 
         // 4. Handle Response
+        if (data.image) {
+            return { type: 'image', content: data.image };
+        }
+
         if (data.text) {
-            // If it's an image node but we got text, it might be a refusal or just text output.
-            // But usually we expect text back unless we asked for an image? 
-            // Wait, the backend currently only returns `text: responseText`.
-            // Does the backend support returning images?
-            // The backend uses `result.response.text()`. 
-            // If we generated an image, `text()` might be empty or contain metadata?
-            // Ah, for Image Generation (Imagen), the response structure is different.
-            // But here we are using Gemini for "Image Editing" or "Vision" (Image to Text).
-            // If we are doing Text-to-Image, Gemini models (except Imagen) don't do that yet via `generateContent` in the same way?
-            // Wait, `gemini-2.5-flash-image` is a vision model (Image Input -> Text Output).
-            // Does the user expect Image Output?
-            // The previous code had `CASE 2: Image Node Operations`.
-            // It used `gemini-2.5-flash-image`. This is usually for Vision.
-            // BUT, the previous code checked `part.inlineData` in the response!
-            // `gemini-2.5-flash-image` (or similar) CAN generate images? 
-            // Actually, standard Gemini models are Multimodal INPUT, Text OUTPUT.
-            // Imagen is for Image Output.
-            // The previous code had:
-            // `for (const part of response.candidates?.[0]?.content?.parts || []) { if (part.inlineData) ... }`
-            // This suggests the user WAS getting images back.
-            // If so, the backend `responseText = result.response.text()` will MISS the image data!
-
-            // CRITICAL: The backend needs to return the full response or handle image parts if we expect image output.
-            // However, for now, let's assume we are mostly doing Text/Vision (Text Output).
-            // If the user expects Image Generation (Text -> Image), we need to fix the backend to return `parts`.
-
-            // Let's stick to what the backend returns for now.
             return { type: 'text', content: data.text };
         }
 

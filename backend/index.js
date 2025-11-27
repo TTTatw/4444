@@ -32,7 +32,7 @@ const adminEmailSet = new Set(
 
 const app = express();
 app.use(cors({ origin: ALLOW_ORIGIN === '*' ? true : ALLOW_ORIGIN.split(',').map((s) => s.trim()), credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' })); // Increase limit for image uploads
 
 // Auth middleware: validates Supabase access token
 async function authGuard(req, res, next) {
@@ -346,59 +346,42 @@ app.post('/api/generate', authGuard, async (req, res) => {
     if (prompt) parts.push({ text: prompt });
     if (image) {
       // Assuming image is passed as a Part object or similar structure from frontend
-      // Frontend sends: { inlineData: { mimeType: ..., data: ... } }
-      // The SDK expects 'Part' objects.
-      parts.push(image);
-    }
-
-    const request = {
-      model: model,
-      contents: { parts }
-    };
-
-    const result = await genAI.models.generateContent(request);
-    const responseText = result.text; // In new SDK, result.text is a property (getter)
-    // In frontend code: `const textResult = response.text;` (property)
-    // Let's verify frontend code again.
-    // Frontend: `const response = await ai.models.generateContent(request); const textResult = response.text;`
-    // So it is a property.
-
-    // 3. Deduct Balance & Log Usage (Transactional ideally, but sequential for now)
-    const { error: updateError } = await supabaseAdmin
-      .from('profiles')
-      .update({ balance: profile.balance - COST_PER_REQUEST })
       .eq('id', userId);
 
-    if (updateError) console.error('Failed to deduct balance', updateError);
+      if (updateError) console.error('Failed to deduct balance', updateError);
 
-    await supabaseAdmin.from('usage_logs').insert({
-      user_id: userId,
-      provider: 'google',
-      model: model,
-      resource_type: image ? 'image_to_text' : 'text', // Simplified classification
-      cost_credits: COST_PER_REQUEST,
-      tokens_input: 0, // TODO: Count tokens
-      tokens_output: 0, // TODO: Count tokens
-      status: 'success'
-    });
+      await supabaseAdmin.from('usage_logs').insert({
+        user_id: userId,
+        provider: 'google',
+        model: targetModel,
+        resource_type: responseImage ? 'image' : 'text',
+        cost_credits: COST_PER_REQUEST,
+        tokens_input: 0,
+        tokens_output: 0,
+        status: 'success'
+      });
 
-    res.json({ text: responseText });
+      if (responseImage) {
+        res.json({ image: responseImage });
+      } else {
+        res.json({ text: responseText });
+      }
 
-  } catch (err) {
-    console.error('Generation failed:', err);
-    // Log failure
-    await supabaseAdmin.from('usage_logs').insert({
-      user_id: userId,
-      provider: 'google',
-      model: model,
-      resource_type: 'text',
-      cost_credits: 0,
-      status: 'failed',
-      error_message: err.message
-    });
-    res.status(500).json({ error: 'Generation failed', detail: err.message });
-  }
-});
+    } catch (err) {
+      console.error('Generation failed:', err);
+      // Log failure
+      await supabaseAdmin.from('usage_logs').insert({
+        user_id: userId,
+        provider: 'google',
+        model: model,
+        resource_type: 'text',
+        cost_credits: 0,
+        status: 'failed',
+        error_message: err.message
+      });
+      res.status(500).json({ error: 'Generation failed', detail: err.message });
+    }
+  });
 
 const port = process.env.PORT || 3001;
 app.listen(port, () => {
