@@ -304,7 +304,8 @@ app.post('/api/generate', authGuard, async (req, res) => {
 
   try {
     // 1. Check Balance
-    const { data: profile, error: profileError } = await supabaseAdmin
+    // 1. Check Balance
+    let { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('balance, status')
       .eq('id', userId)
