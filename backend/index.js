@@ -116,8 +116,10 @@ app.delete('/api/assets/:id', authGuard, async (req, res) => {
 // History
 app.get('/api/history', authGuard, async (req, res) => {
   try {
-    const page = parseInt(req.query.page as string, 10) || 1;
-    const pageSize = parseInt(req.query.pageSize as string, 10) || 20;
+    const pageRaw = req.query.page ?? '1';
+    const pageSizeRaw = req.query.pageSize ?? '20';
+    const page = parseInt(String(pageRaw), 10) || 1;
+    const pageSize = parseInt(String(pageSizeRaw), 10) || 20;
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
     const base = supabaseAdmin
