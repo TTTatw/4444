@@ -429,8 +429,10 @@ app.post('/api/generate', authGuard, async (req, res) => {
 
     if (responseImage) {
       res.json({ image: responseImage });
-    } else {
+    } else if (responseText) {
       res.json({ text: responseText });
+    } else {
+      throw new Error('Model returned no content (empty text and no image).');
     }
 
   } catch (err) {
