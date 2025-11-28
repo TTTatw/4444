@@ -3,6 +3,7 @@ import type { HistoryItem, SerializedConnection, SerializedNode, WorkflowAsset }
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const apiBase = (import.meta as any).env?.VITE_API_BASE_URL;
 
 // Some browsers/contexts禁用 localStorage 会导致 “Access to storage is not allowed”。
 // 提供一个安全的 storage 选择：localStorage -> sessionStorage -> 内存。
@@ -112,6 +113,25 @@ export const deleteAsset = async (assetId: string) => {
 };
 
 export const fetchHistoryItems = async (): Promise<HistoryItem[]> => {
+    const session = await supabase?.auth.getSession();
+    const token = session?.data.session?.access_token;
+    if (apiBase && token) {
+        const res = await fetch(`${apiBase}/api/history`, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const json = await res.json();
+        const data: HistoryRow[] = json.data || json;
+        return data.map((row: HistoryRow) => ({
+            id: row.id,
+            timestamp: new Date(row.created_at),
+            image: row.image,
+            prompt: row.prompt,
+            context: row.context,
+            nodeName: row.node_name,
+            ownerId: row.owner_id,
+        }));
+    }
     if (!supabase) return [];
     const { data, error } = await supabase.from(HISTORY_TABLE).select('*').order('created_at', { ascending: false });
     if (error) throw error;
@@ -127,6 +147,27 @@ export const fetchHistoryItems = async (): Promise<HistoryItem[]> => {
 };
 
 export const insertHistoryItem = async (item: HistoryItem, ownerId?: string) => {
+    const session = await supabase?.auth.getSession();
+    const token = session?.data.session?.access_token;
+    if (apiBase && token) {
+        await fetch(`${apiBase}/api/history`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                id: item.id,
+                image: item.image,
+                prompt: item.prompt,
+                context: item.context,
+                node_name: item.nodeName,
+                created_at: item.timestamp.toISOString(),
+                owner_id: ownerId ?? item.ownerId,
+            })
+        });
+        return;
+    }
     if (!supabase) return;
     const { error } = await supabase.from(HISTORY_TABLE).insert({
         id: item.id,
@@ -141,6 +182,15 @@ export const insertHistoryItem = async (item: HistoryItem, ownerId?: string) => 
 };
 
 export const removeHistoryItem = async (id: string, ownerId?: string) => {
+    const session = await supabase?.auth.getSession();
+    const token = session?.data.session?.access_token;
+    if (apiBase && token) {
+        await fetch(`${apiBase}/api/history/${id}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        return;
+    }
     if (!supabase) return;
     const query = supabase.from(HISTORY_TABLE).delete().eq('id', id);
     const { error } = ownerId ? await query.eq('owner_id', ownerId) : await query;
@@ -148,6 +198,8 @@ export const removeHistoryItem = async (id: string, ownerId?: string) => {
 };
 
 export const clearHistoryItems = async (ownerId?: string) => {
+    // 若走后端，建议使用管理页面批量删除，这里留空避免误删
+    if (apiBase) return;
     if (!supabase) return;
     const query = supabase.from(HISTORY_TABLE).delete();
     const { error } = ownerId ? await query.eq('owner_id', ownerId) : await query;
@@ -165,58 +217,54 @@ type UserRow = {
 export const fetchUsers = async (): Promise<{ name: string; password: string; id: string; email?: string; }[]> => {
     const session = await supabase?.auth.getSession();
     const token = session?.data.session?.access_token;
-    if (!token) return [];
-
-    const response = await fetch('https://4444-production.up.railway.app/api/users', {
-        headers: {
-            'Authorization': `Bearer ${token}`
+    if (apiBase && token) {
+        const response = await fetch(`${apiBase}/api/users`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to list users');
         }
-    });
-
-    if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Failed to list users');
+        const data = await response.json();
+        return data.users;
     }
-
-    const data = await response.json();
-    return data.users;
+    if (!token) return [];
+    return [];
 };
 
 export const upsertUser = async (user: { id?: string; name: string; password: string; }) => {
     const session = await supabase?.auth.getSession();
     const token = session?.data.session?.access_token;
-    if (!token) return;
-
-    const response = await fetch('https://4444-production.up.railway.app/api/users', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ email: user.name, password: user.password, role: 'user' })
-    });
-
-    if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Failed to create user');
+    if (apiBase && token) {
+        const response = await fetch(`${apiBase}/api/users`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ email: user.name, password: user.password, role: 'user' })
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to create user');
+        }
+        return;
     }
 };
 
 export const deleteUser = async (id: string) => {
     const session = await supabase?.auth.getSession();
     const token = session?.data.session?.access_token;
-    if (!token) return;
-
-    const response = await fetch(`https://4444-production.up.railway.app/api/users/${id}`, {
-        method: 'DELETE',
-        headers: {
-            'Authorization': `Bearer ${token}`
+    if (apiBase && token) {
+        const response = await fetch(`${apiBase}/api/users/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to delete user');
         }
-    });
-
-    if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Failed to delete user');
+        return;
     }
 };
 

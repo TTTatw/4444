@@ -68,7 +68,7 @@ export const WorkflowToolbar: React.FC<Props> = ({ onLoad, onOpenLibrary, onOpen
                 {currentUser.role === 'admin' && (
                     <>
                         <IconButton title="Admin Dashboard" onClick={onOpenAdminDashboard}><AdminIcon /></IconButton>
-                        <IconButton title="API Key" onClick={onOpenApiKeyModal}><KeyIcon /></IconButton>
+                        {/* API key 已由后端托管，前端入口隐藏 */}
                     </>
                 )}
                 <IconButton title="Asset Library" onClick={onOpenLibrary}><LibraryIcon /></IconButton>

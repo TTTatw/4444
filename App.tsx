@@ -51,6 +51,7 @@ const App: React.FC = () => {
     const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
     const [apiKeyDraft, setApiKeyDraft] = useState('');
     const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+    const [authLoading, setAuthLoading] = useState(true);
     const [loginName, setLoginName] = useState('');
     const [loginPassword, setLoginPassword] = useState('');
     const [authorizedUsers, setAuthorizedUsers] = useState<{ id?: string; name: string; password: string; }[]>([]);
@@ -1192,8 +1193,10 @@ const App: React.FC = () => {
             if (session?.user) {
                 const role = deriveRole(session.user.email || '', (session.user.user_metadata as any)?.role);
                 setCurrentUser({ role, name: session.user.email || 'User', id: session.user.id });
+            } else {
+                setIsAuthModalOpen(true);
             }
-        });
+        }).finally(() => setAuthLoading(false));
         const { data: sub } = auth.onAuthStateChange((_event, session) => {
             if (session?.user) {
                 const role = deriveRole(session.user.email || '', (session.user.user_metadata as any)?.role);
@@ -1706,6 +1709,14 @@ const App: React.FC = () => {
             console.error("Failed to delete user:", error);
         }
     };
+
+    if (authLoading) {
+        return (
+            <div className="w-screen h-screen bg-[#0f1118] flex items-center justify-center text-slate-200">
+                <div className="animate-spin h-10 w-10 border-2 border-slate-600 border-t-transparent rounded-full"></div>
+            </div>
+        );
+    }
 
     if (currentUser.role === 'guest') {
         return <LoginPage onLogin={(email, password, isRegister) => {

@@ -42,7 +42,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose, current
     const [editingUser, setEditingUser] = useState<User | null>(null);
     const [editBalance, setEditBalance] = useState(0);
 
-    const API_BASE = import.meta.env.VITE_API_URL || 'https://4444-production.up.railway.app'; // Fallback or env
+    const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://4444-production.up.railway.app'; // Fallback or env
 
     const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
         const session = await supabaseAuth()?.getSession();
