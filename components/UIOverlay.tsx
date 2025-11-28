@@ -51,9 +51,7 @@ export const UIOverlay: React.FC<Props> = ({
                 zoom={zoom}
                 onZoomChange={onZoomChange}
             />
-            {history.length > 0 && (
-                <HistoryTray history={history} onSelect={onSelectHistory} onClearAll={onClearHistory} onDeleteItem={onDeleteHistory} />
-            )}
+            <HistoryTray history={history} onSelect={onSelectHistory} onClearAll={onClearHistory} onDeleteItem={onDeleteHistory} />
         </>
     );
 

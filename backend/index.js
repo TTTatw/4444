@@ -356,6 +356,11 @@ app.post('/api/generate', authGuard, async (req, res) => {
       contents: { parts }
     };
 
+    console.log('--- DEBUG REQUEST ---');
+    console.log('Model:', targetModel);
+    console.log('Parts:', JSON.stringify(parts, null, 2));
+    console.log('--- DEBUG REQUEST END ---');
+
     const result = await genAI.models.generateContent(request);
 
     // DEBUG: Log the full result to see structure
@@ -375,10 +380,11 @@ app.post('/api/generate', authGuard, async (req, res) => {
         responseImage = imagePart.inlineData.data;
         responseText = 'Generated image';
       } else {
-        responseText = result.text || 'Image generation failed (No image data returned)';
+        // Fallback to text if image generation failed but returned text
+        responseText = result.response?.text ? result.response.text() : (result.text || 'Image generation failed (No image data returned)');
       }
     } else {
-      responseText = result.text;
+      responseText = result.response?.text ? result.response.text() : (result.text || '');
     }
 
     // 3. Deduct Balance & Log Usage

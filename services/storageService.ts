@@ -112,17 +112,44 @@ export const deleteAsset = async (assetId: string) => {
     if (error) throw error;
 };
 
-export const fetchHistoryItems = async (): Promise<HistoryItem[]> => {
+export const fetchHistoryItems = async (page: number = 1, pageSize: number = 20): Promise<{ data: HistoryItem[], count: number }> => {
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
     const session = await supabase?.auth.getSession();
     const token = session?.data.session?.access_token;
     if (apiBase && token) {
-        const res = await fetch(`${apiBase}/api/history`, {
+        const res = await fetch(`${apiBase}/api/history?page=${page}&limit=${pageSize}`, {
             headers: { Authorization: `Bearer ${token}` }
         });
         if (!res.ok) throw new Error(await res.text());
         const json = await res.json();
-        const data: HistoryRow[] = json.data || json;
-        return data.map((row: HistoryRow) => ({
+        const data: HistoryRow[] = json.data || json.items || [];
+        const count = json.total || json.count || data.length; // Fallback if API doesn't return count
+        return {
+            data: data.map((row: HistoryRow) => ({
+                id: row.id,
+                timestamp: new Date(row.created_at),
+                image: row.image,
+                prompt: row.prompt,
+                context: row.context,
+                nodeName: row.node_name,
+                ownerId: row.owner_id,
+            })),
+            count
+        };
+    }
+    if (!supabase) return { data: [], count: 0 };
+
+    const { data, error, count } = await supabase
+        .from(HISTORY_TABLE)
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+    if (error) throw error;
+    return {
+        data: (data || []).map((row: HistoryRow) => ({
             id: row.id,
             timestamp: new Date(row.created_at),
             image: row.image,
@@ -130,20 +157,9 @@ export const fetchHistoryItems = async (): Promise<HistoryItem[]> => {
             context: row.context,
             nodeName: row.node_name,
             ownerId: row.owner_id,
-        }));
-    }
-    if (!supabase) return [];
-    const { data, error } = await supabase.from(HISTORY_TABLE).select('*').order('created_at', { ascending: false });
-    if (error) throw error;
-    return (data || []).map((row: HistoryRow) => ({
-        id: row.id,
-        timestamp: new Date(row.created_at),
-        image: row.image,
-        prompt: row.prompt,
-        context: row.context,
-        nodeName: row.node_name,
-        ownerId: row.owner_id,
-    }));
+        })),
+        count: count || 0
+    };
 };
 
 export const insertHistoryItem = async (item: HistoryItem, ownerId?: string) => {

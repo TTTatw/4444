@@ -168,6 +168,8 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                         value={node.content}
                         onChange={(e) => onDataChange(node.id, { content: e.target.value })}
                         onBlur={() => setIsContentEditing(false)}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
                         placeholder={placeholderText}
                         className="w-full h-full bg-transparent text-slate-200 p-4 text-sm resize-none focus:outline-none placeholder:text-slate-600 custom-scrollbar font-mono leading-relaxed"
                         autoFocus
@@ -190,7 +192,10 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
             tabIndex={-1} // Allow div to receive focus for paste events
             className={`flex flex-col group/node relative rounded-2xl glass-card outline-none`}
             onMouseDown={(e) => {
-                e.currentTarget.focus(); // Manually focus on click to enable paste on div
+                const target = e.target as HTMLElement;
+                if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') {
+                    e.currentTarget.focus(); // Manually focus on click to enable paste on div
+                }
                 onMouseDown(node.id, e);
             }}
             onPaste={handlePaste}
