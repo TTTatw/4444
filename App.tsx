@@ -343,7 +343,7 @@ const App: React.FC = () => {
             inputImage: null,
             width: DEFAULT_NODE_WIDTH,
             height: DEFAULT_NODE_HEIGHT,
-            selectedModel: type === 'image' ? 'gemini-2.5-flash-image' : 'gemini-1.5-flash',
+            selectedModel: type === 'image' ? 'gemini-2.5-flash-image' : 'gemini-3-pro-preview',
         };
         setNodes(ns => [...ns, newNode]);
         return newNode;
