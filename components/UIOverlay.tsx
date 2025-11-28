@@ -12,6 +12,7 @@ interface Props {
     onOpenHistory: () => void;
     onOpenApiKeyModal: () => void;
     onOpenAuthModal: () => void;
+    onOpenAdminDashboard: () => void;
     history: HistoryItem[];
     onSelectHistory: (item: HistoryItem) => void;
     onClearHistory: () => void;
@@ -28,6 +29,7 @@ export const UIOverlay: React.FC<Props> = ({
     onOpenHistory,
     onOpenApiKeyModal,
     onOpenAuthModal,
+    onOpenAdminDashboard,
     history,
     onSelectHistory,
     onClearHistory,
@@ -43,6 +45,7 @@ export const UIOverlay: React.FC<Props> = ({
                 onOpenHistory={onOpenHistory}
                 onOpenApiKeyModal={onOpenApiKeyModal}
                 onOpenAuthModal={onOpenAuthModal}
+                onOpenAdminDashboard={onOpenAdminDashboard}
                 currentUser={currentUser}
                 onLogout={onLogout}
                 zoom={zoom}
