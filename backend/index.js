@@ -116,17 +116,21 @@ app.delete('/api/assets/:id', authGuard, async (req, res) => {
 // History
 app.get('/api/history', authGuard, async (req, res) => {
   try {
-    const { page = 1, pageSize = 20 } = req.query;
+    const page = parseInt(req.query.page as string, 10) || 1;
+    const pageSize = parseInt(req.query.pageSize as string, 10) || 20;
     const from = (page - 1) * pageSize;
-    const to = from + Number(pageSize) - 1;
-    const base = supabaseAdmin.from('history_items').select('*', { count: 'exact' }).order('created_at', { ascending: false });
+    const to = from + pageSize - 1;
+    const base = supabaseAdmin
+      .from('history_items')
+      .select('*')
+      .order('created_at', { ascending: false });
     const query =
       req.user.role === 'admin'
         ? base
         : base.eq('owner_id', req.user.id);
-    const { data, error, count } = await query.range(from, to);
+    const { data, error } = await query.range(from, to);
     if (error) throw error;
-    res.json({ data, count });
+    res.json({ data });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch history', detail: err.message });
   }

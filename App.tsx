@@ -45,6 +45,7 @@ const App: React.FC = () => {
     const [connections, setConnections] = useState<ConnectionType[]>([]);
     const [groups, setGroups] = useState<Group[]>([]);
     const [history, setHistory] = useState<HistoryItem[]>([]);
+    const [historyCutoff, setHistoryCutoff] = useState<number>(0); // 底部历史栏清空的时间戳
     const [assets, setAssets] = useState<WorkflowAsset[]>([]);
     const supabaseEnabled = isSupabaseConfigured();
     const [apiKey, setApiKey] = useState<string | null>(null);
@@ -1555,11 +1556,9 @@ const App: React.FC = () => {
     }, [selectedNodes, selectedGroups, pan, zoom]);
 
     const handleClearHistory = useCallback(() => {
-        setHistory(h => h.filter(item => item.ownerId && item.ownerId !== currentUser.id && currentUser.role !== 'admin'));
-        if (supabaseEnabled) {
-            clearHistoryItems(currentUser.role === 'admin' ? undefined : currentUser.id).catch(err => console.error("Supabase clear history failed:", err));
-        }
-    }, [supabaseEnabled, currentUser]);
+        // 清空底部历史栏视图，不触碰数据库。记录清空时间戳，新生成的历史仍会出现。
+        setHistoryCutoff(Date.now());
+    }, []);
 
     const handleDeleteHistoryItem = useCallback((id: string) => {
         setHistory(h => h.filter(item => item.id !== id));
@@ -1938,7 +1937,7 @@ const App: React.FC = () => {
                 onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
                 onOpenAuthModal={() => setIsAccountModalOpen(true)}
                 onOpenAdminDashboard={() => setIsAdminDashboardOpen(true)}
-                history={visibleHistory}
+                history={visibleHistory.filter(h => h.timestamp.getTime() > historyCutoff).slice(0, 20)}
                 onSelectHistory={setSelectedHistoryItem}
                 onClearHistory={handleClearHistory}
                 onDeleteHistory={handleDeleteHistoryItem}
