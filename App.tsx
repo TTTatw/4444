@@ -856,19 +856,21 @@ const App: React.FC = () => {
         if (nodeToExecute.type === 'image' && nodeToExecute.inputImage && !isGenerated && !isPreviousOutput) {
             inputs.push({ type: 'image', data: nodeToExecute.inputImage });
         }
+
+        const instructionToUse = instructionFromInput !== undefined ? instructionFromInput : nodeToExecute.instruction;
+
         // For image nodes without instruction, use text input as the prompt
-        let finalInstruction = instructionFromInput || nodeToExecute.instruction || '';
-        if (nodeToExecute.type === 'image' && !finalInstruction.trim()) {
+        let finalInstruction = instructionToUse;
+        let finalInputs = inputs;
+
+        if (nodeToExecute.type === 'image' && !instructionToUse.trim()) {
             const textInputs = inputs.filter(inp => inp.type === 'text' && inp.data);
             if (textInputs.length > 0) {
+                // Use text inputs as instruction
                 finalInstruction = textInputs.map(inp => inp.data).join('\n\n');
+                // Remove text from inputs to avoid duplication (keep only image inputs)
+                finalInputs = inputs.filter(inp => inp.type !== 'text');
             }
-        }
-
-        // Filter out image inputs for image nodes to prevent "Vision Mode" (text output)
-        let finalInputs = inputs;
-        if (nodeToExecute.type === 'image') {
-            finalInputs = inputs.filter(inp => inp.type !== 'image');
         }
 
         try {
@@ -890,7 +892,7 @@ const App: React.FC = () => {
                     height: undefined
                 });
                 const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
-                const historyItem: HistoryItem = { id: `hist-${Date.now()}`, timestamp: new Date(), image: result.content, prompt: finalInstruction, context, nodeName: nodeToExecute.name, ownerId: currentUser.id };
+                const historyItem: HistoryItem = { id: `hist-${Date.now()}`, timestamp: new Date(), image: result.content, prompt: instructionToUse, context, nodeName: nodeToExecute.name, ownerId: currentUser.id };
                 setHistory(h => [historyItem, ...h]);
                 if (supabaseEnabled) {
                     insertHistoryItem(historyItem, currentUser.id).catch(err => console.error("Supabase history insert failed:", err));
@@ -1015,7 +1017,7 @@ const App: React.FC = () => {
             await new Promise(resolve => setTimeout(resolve, 100));
 
             try {
-                // Determine if this node is "generated" (has inputs).
+                // Determine if this node is "generated" (has inputs). 
                 // We check global connections because a group node might receive from outside.
                 const hasInputs = incomingConns.length > 0;
                 const hasInstruction = currentNodeData.instruction.trim().length > 0;
@@ -1024,16 +1026,13 @@ const App: React.FC = () => {
                 // But if it has an image (User Uploaded), we shouldn't skip it if downstream depends on it.
                 // The 'runNode' call handles "just pass data" if needed, but usually we only call API if there is work.
                 // Actually, nodes without inputs don't *run* API unless they are generators (have instruction).
-                const updatedNode = { ...currentNodeData };
-                let result: any = null;
-                let finalInstruction = currentNodeData.instruction;
-
                 if (!hasInputs && !hasInstruction) {
                     // It's a static provider node (like an uploaded image with no prompt).
-                    // We just mark success so children can run.
-                    updatedNode.status = 'success';
+                    // We don't need to call API. We just mark success so children can run.
+                    // The data is already in executionData.
                 } else {
                     // Prepare inputs from executionData
+                    // Since executionData now has all nodes, this works for external dependencies too.
                     const inputNodesData = incomingConns
                         .map(c => executionData.get(c.from))
                         .filter(n => n !== undefined) as Node[];
@@ -1043,21 +1042,27 @@ const App: React.FC = () => {
                         data: n.type === 'image' ? n.inputImage : n.content
                     }));
 
+                    // Self-image input (if it's a root node effectively for this operation or purely editing)
+                    // If hasInputs is false, it's a root. If it has inputs, we generally don't use its own image unless specifically handled?
+                    if (currentNodeData.type === 'image' && currentNodeData.inputImage && !hasInputs) {
+                        inputs.push({ type: 'image', data: currentNodeData.inputImage });
+                    }
+
                     // For image nodes without instruction, use text input as the prompt
+                    let finalInstruction = currentNodeData.instruction;
+                    let finalInputs = inputs;
+
                     if (currentNodeData.type === 'image' && !finalInstruction.trim()) {
                         const textInputs = inputs.filter(inp => inp.type === 'text' && inp.data);
                         if (textInputs.length > 0) {
+                            // Use text inputs as instruction
                             finalInstruction = textInputs.map(inp => inp.data).join('\n\n');
+                            // Remove text from inputs to avoid duplication (keep only image inputs)
+                            finalInputs = inputs.filter(inp => inp.type !== 'text');
                         }
                     }
 
-                    // Filter out image inputs for image nodes to prevent "Vision Mode" (text output)
-                    let finalInputs = inputs;
-                    if (currentNodeData.type === 'image') {
-                        finalInputs = inputs.filter(inp => inp.type !== 'image');
-                    }
-
-                    result = await runNode(
+                    const result = await runNode(
                         finalInstruction,
                         currentNodeData.type,
                         finalInputs,
@@ -1065,16 +1070,18 @@ const App: React.FC = () => {
                         apiKey || undefined
                     );
 
+                    // Update Local Data
+                    const updatedNode = { ...currentNodeData };
                     if (result.type === 'image') {
-                        updatedNode.content = 'Generated image';
                         updatedNode.inputImage = result.content;
+                        updatedNode.content = 'Generated image';
                         // Store history item
                         const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
                         const histItem: HistoryItem = {
                             id: `hist-${Date.now()}-${nodeId}`,
                             timestamp: new Date(),
                             image: result.content,
-                            prompt: finalInstruction,
+                            prompt: currentNodeData.instruction,
                             context,
                             nodeName: currentNodeData.name,
                             ownerId: currentUser.id,
@@ -1092,18 +1099,17 @@ const App: React.FC = () => {
                         }
                     }
                     updatedNode.status = 'success';
+                    executionData.set(nodeId, updatedNode);
+
+                    // Update UI
+                    setNodes(ns => ns.map(n => n.id === nodeId ? {
+                        ...n,
+                        ...updatedNode,
+                        status: 'success',
+                        width: undefined,
+                        height: undefined
+                    } : n));
                 }
-
-                executionData.set(nodeId, updatedNode);
-
-                // Update UI
-                setNodes(ns => ns.map(n => n.id === nodeId ? {
-                    ...n,
-                    ...updatedNode,
-                    status: 'success',
-                    width: undefined,
-                    height: undefined
-                } : n));
 
                 // Trigger Children
                 const children = adj.get(nodeId) || [];

@@ -36,28 +36,7 @@ const adminEmailSet = new Set(
 const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 const app = express();
-app.use(cors({
-  origin: (origin, callback) => {
-    const allowedOrigins = (ALLOW_ORIGIN || '*').split(',').map((s) => s.trim());
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-
-    // Check if the origin is explicitly allowed, or if it's a Vercel/Railway app, or if wildcard is used
-    const isAllowed = allowedOrigins.includes('*') ||
-      allowedOrigins.includes(origin) ||
-      origin.endsWith('.vercel.app') ||
-      origin.endsWith('.railway.app') ||
-      origin.includes('localhost');
-
-    if (isAllowed) {
-      callback(null, true);
-    } else {
-      console.log('Blocked by CORS:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true
-}));
+app.use(cors({ origin: ALLOW_ORIGIN === '*' ? true : ALLOW_ORIGIN.split(',').map((s) => s.trim()), credentials: true }));
 app.use(express.json({ limit: '50mb' })); // Increase limit for image uploads
 
 // Auth middleware: validates Supabase access token
@@ -429,10 +408,8 @@ app.post('/api/generate', authGuard, async (req, res) => {
 
     if (responseImage) {
       res.json({ image: responseImage });
-    } else if (responseText) {
-      res.json({ text: responseText });
     } else {
-      throw new Error('Model returned no content (empty text and no image).');
+      res.json({ text: responseText });
     }
 
   } catch (err) {
