@@ -45,6 +45,7 @@ const App: React.FC = () => {
     const [connections, setConnections] = useState<ConnectionType[]>([]);
     const [groups, setGroups] = useState<Group[]>([]);
     const [history, setHistory] = useState<HistoryItem[]>([]);
+    const [sessionHistory, setSessionHistory] = useState<HistoryItem[]>([]); // Session-only (max 20)
     const [assets, setAssets] = useState<WorkflowAsset[]>([]);
     const supabaseEnabled = isSupabaseConfigured();
     const [apiKey, setApiKey] = useState<string | null>(null);
@@ -98,6 +99,8 @@ const App: React.FC = () => {
     const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
     const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
     const [historyModalSelection, setHistoryModalSelection] = useState<Set<string>>(new Set());
+    const [historyPage, setHistoryPage] = useState(1);
+    const [historyLoading, setHistoryLoading] = useState(false);
     const [isAssetLibraryOpen, setIsAssetLibraryOpen] = useState(false);
     const [isSaveAssetModalOpen, setIsSaveAssetModalOpen] = useState(false);
     const [groupToSave, setGroupToSave] = useState<Group | null>(null);
@@ -373,8 +376,10 @@ const App: React.FC = () => {
             const drag = groupDragRef.current;
             const group = groupsRef.current.find(g => g.id === drag.id);
             if (!group) return;
-            const newX = (e.clientX - pan.x - drag.offset.x) / zoom;
-            const newY = (e.clientY - pan.y - drag.offset.y) / zoom;
+            const canvasX = (e.clientX - pan.x) / zoom;
+            const canvasY = (e.clientY - pan.y) / zoom;
+            const newX = canvasX - drag.offset.x;
+            const newY = canvasY - drag.offset.y;
             const deltaX = newX - group.position.x;
             const deltaY = newY - group.position.y;
             if (Math.abs(deltaX) > 0 || Math.abs(deltaY) > 0) {
@@ -665,11 +670,13 @@ const App: React.FC = () => {
 
         const group = groupsRef.current.find(g => g.id === groupId);
         if (group) {
+            const canvasX = (e.clientX - pan.x) / zoom;
+            const canvasY = (e.clientY - pan.y) / zoom;
             groupDragRef.current = {
                 id: groupId,
                 offset: {
-                    x: e.clientX - (group.position.x * zoom + pan.x),
-                    y: e.clientY - (group.position.y * zoom + pan.y),
+                    x: canvasX - group.position.x,
+                    y: canvasY - group.position.y,
                 }
             };
         }
@@ -861,6 +868,7 @@ const App: React.FC = () => {
                 const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
                 const historyItem: HistoryItem = { id: `hist-${Date.now()}`, timestamp: new Date(), image: result.content, prompt: instructionToUse, context, nodeName: nodeToExecute.name, ownerId: currentUser.id };
                 setHistory(h => [historyItem, ...h]);
+                setSessionHistory(sh => [historyItem, ...sh].slice(0, 20)); // Max 20
                 if (supabaseEnabled) {
                     insertHistoryItem(historyItem, currentUser.id).catch(err => console.error("Supabase history insert failed:", err));
                 }
@@ -1085,6 +1093,7 @@ const App: React.FC = () => {
 
                 if (newHistoryItems.length > 0) {
                     setHistory(h => [...newHistoryItems.filter(item => !h.some(existing => existing.id === item.id)).reverse(), ...h]);
+                    setSessionHistory(sh => [...newHistoryItems.filter(item => !sh.some(existing => existing.id === item.id)).reverse(), ...sh].slice(0, 20)); // Max 20
                     if (supabaseEnabled) {
                         newHistoryItems.forEach(item => insertHistoryItem({ ...item, ownerId: currentUser.id }, currentUser.id).catch(err => console.error("Supabase history insert failed:", err)));
                     }
@@ -1857,6 +1866,19 @@ const App: React.FC = () => {
                                 <h3 className="text-lg font-semibold text-white">历史图库</h3>
                                 <div className="flex items-center gap-2">
                                     <button
+                                        onClick={() => {
+                                            const displayed = history.slice(0, historyPage * 20);
+                                            if (historyModalSelection.size === displayed.length) {
+                                                setHistoryModalSelection(new Set());
+                                            } else {
+                                                setHistoryModalSelection(new Set(displayed.map(i => i.id)));
+                                            }
+                                        }}
+                                        className="px-3 py-1 rounded text-sm bg-slate-600 text-white hover:bg-slate-500"
+                                    >
+                                        全选
+                                    </button>
+                                    <button
                                         disabled={historyModalSelection.size === 0}
                                         onClick={() => handleBulkDeleteHistory(Array.from(historyModalSelection))}
                                         className={`px-3 py-1 rounded text-sm ${historyModalSelection.size === 0 ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-500'}`}
@@ -1880,10 +1902,39 @@ const App: React.FC = () => {
                                     <button onClick={() => setIsHistoryModalOpen(false)} className="text-slate-300 hover:text-white">&times;</button>
                                 </div>
                             </div>
-                            <div className="overflow-y-auto custom-scrollbar grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                                {history.map(item => (
-                                    <div key={item.id} className={`relative bg-slate-800/70 border ${historyModalSelection.has(item.id) ? 'border-sky-500' : 'border-slate-700'} rounded-lg overflow-hidden`}>
-                                        <div className="absolute top-2 left-2">
+                            <div
+                                className="overflow-y-auto custom-scrollbar grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3"
+                                onScroll={(e) => {
+                                    const target = e.currentTarget;
+                                    if (target.scrollHeight - target.scrollTop <= target.clientHeight + 50 && !historyLoading && historyPage * 20 < history.length) {
+                                        setHistoryLoading(true);
+                                        setTimeout(() => {
+                                            setHistoryPage(p => p + 1);
+                                            setHistoryLoading(false);
+                                        }, 300);
+                                    }
+                                }}
+                            >
+                                {history.slice(0, historyPage * 20).map(item => (
+                                    <div
+                                        key={item.id}
+                                        className={`relative bg-slate-800/70 border ${historyModalSelection.has(item.id) ? 'border-sky-500' : 'border-slate-700'} rounded-lg overflow-hidden cursor-pointer`}
+                                        style={{ aspectRatio: '3/4' }}
+                                        onClick={(e) => {
+                                            if (e.ctrlKey || e.metaKey) {
+                                                e.preventDefault();
+                                                setHistoryModalSelection(prev => {
+                                                    const next = new Set(prev);
+                                                    if (next.has(item.id)) next.delete(item.id);
+                                                    else next.add(item.id);
+                                                    return next;
+                                                });
+                                            } else if (!(e.target as HTMLElement).closest('input[type="checkbox"]')) {
+                                                setSelectedHistoryItem(item);
+                                            }
+                                        }}
+                                    >
+                                        <div className="absolute top-2 left-2 z-10">
                                             <input
                                                 type="checkbox"
                                                 checked={historyModalSelection.has(item.id)}
@@ -1894,15 +1945,16 @@ const App: React.FC = () => {
                                                         return next;
                                                     });
                                                 }}
+                                                className="w-5 h-5 cursor-pointer"
+                                                onClick={(e) => e.stopPropagation()}
                                             />
                                         </div>
-                                        <img src={`data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-40 object-cover" />
-                                        <div className="p-2 text-sm text-slate-200 space-y-1">
-                                            <p className="font-semibold line-clamp-1">{item.nodeName}</p>
-                                            <p className="text-xs text-slate-400 line-clamp-2">{item.prompt}</p>
-                                        </div>
+                                        <img src={`data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-full object-cover" />
                                     </div>
                                 ))}
+                                {historyLoading && (
+                                    <div className="col-span-full text-center py-4 text-slate-400">加载中...</div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -1938,10 +1990,10 @@ const App: React.FC = () => {
                 onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
                 onOpenAuthModal={() => setIsAccountModalOpen(true)}
                 onOpenAdminDashboard={() => setIsAdminDashboardOpen(true)}
-                history={visibleHistory}
+                history={sessionHistory}
                 onSelectHistory={setSelectedHistoryItem}
-                onClearHistory={handleClearHistory}
-                onDeleteHistory={handleDeleteHistoryItem}
+                onClearHistory={() => setSessionHistory([])}
+                onDeleteHistory={(id) => setSessionHistory(sh => sh.filter(item => item.id !== id))}
                 zoom={zoom}
                 onZoomChange={(z) => zoomAroundPoint(z)}
             />
