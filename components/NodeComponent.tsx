@@ -41,7 +41,13 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                 }
                 onDataChange(node.id, { width: newWidth, height: newHeight });
             };
-            img.src = `data:image/png;base64,${node.inputImage}`;
+            // Handle both Base64 and URL
+            if (node.inputImage.startsWith('http')) {
+                img.crossOrigin = "Anonymous"; // Important for CORS
+                img.src = node.inputImage;
+            } else {
+                img.src = `data:image/png;base64,${node.inputImage}`;
+            }
         } else if (node.type === 'text' && (node.width || node.height)) {
             onDataChange(node.id, { width: undefined, height: undefined });
         }
@@ -97,6 +103,9 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
         if (isImageNode) {
             // Case 1: Has an image to display
             if (node.inputImage) {
+                const imgSrc = node.inputImage.startsWith('http')
+                    ? node.inputImage
+                    : `data:image/png;base64,${node.inputImage}`;
                 return (
                     <div className="relative h-full w-full group/image-content rounded-xl overflow-hidden">
                         <div className="h-full w-full flex items-center justify-center bg-black/20">
@@ -132,11 +141,27 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
             // Case 2: No image, is a user-input node -> show upload placeholder
             if (!isGenerated) {
                 return (
-                    <div className={`w-full h-full flex flex-col items-center justify-center text-center p-4 border border-dashed border-white/10 rounded-xl bg-white/5 transition-colors ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-white/10'}`} onClick={() => !isLocked && fileInputRef.current?.click()}>
-                        <div className="p-3 bg-white/5 rounded-full text-neon-blue mb-3 shadow-[0_0_15px_rgba(0,243,255,0.2)]">
+                    <div className={`w-full h-full flex flex-col items-center justify-center text-center p-4 border border-dashed border-white/10 rounded-xl bg-white/5 transition-colors ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-default'}`}>
+                        <div
+                            className="p-3 bg-white/5 rounded-full text-neon-blue mb-3 shadow-[0_0_15px_rgba(0,243,255,0.2)] cursor-pointer hover:bg-white/10 transition-colors"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                !isLocked && fileInputRef.current?.click();
+                            }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                        >
                             <UploadIcon />
                         </div>
-                        <p className="text-xs text-slate-400 font-medium">Upload or Paste Image</p>
+                        <p
+                            className="text-xs text-slate-400 font-medium cursor-pointer hover:text-slate-200 transition-colors"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                !isLocked && fileInputRef.current?.click();
+                            }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                        >
+                            Upload or Paste Image
+                        </p>
                     </div>
                 );
             }

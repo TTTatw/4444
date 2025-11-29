@@ -16,6 +16,8 @@ export const HistoryDetailModal: React.FC<Props> = ({ item, onClose }) => {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [onClose]);
 
+    const [dimensions, setDimensions] = React.useState<{ width: number; height: number } | null>(null);
+
     const handleDownload = useCallback(() => {
         const link = document.createElement('a');
         link.href = `data:image/png;base64,${item.image}`;
@@ -36,7 +38,12 @@ export const HistoryDetailModal: React.FC<Props> = ({ item, onClose }) => {
             >
                 {/* Image Panel */}
                 <div className="flex-1 flex items-center justify-center p-4 bg-black/20">
-                    <img src={`data:image/png;base64,${item.image}`} alt={item.nodeName} className="max-w-full max-h-full object-contain rounded-md" />
+                    <img
+                        src={`data:image/png;base64,${item.image}`}
+                        alt={item.nodeName}
+                        className="max-w-full max-h-full object-contain rounded-md"
+                        onLoad={(e) => setDimensions({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
+                    />
                 </div>
 
                 {/* Info Panel */}
@@ -57,6 +64,12 @@ export const HistoryDetailModal: React.FC<Props> = ({ item, onClose }) => {
                             <h3 className="text-xs text-slate-400 font-semibold mb-1">生成时间</h3>
                             <p className="text-sm text-slate-200">{item.timestamp.toLocaleString()}</p>
                         </div>
+                        {dimensions && (
+                            <div>
+                                <h3 className="text-xs text-slate-400 font-semibold mb-1">分辨率</h3>
+                                <p className="text-sm text-slate-200">{dimensions.width} x {dimensions.height}</p>
+                            </div>
+                        )}
                         <div>
                             <h3 className="text-xs text-slate-400 font-semibold mb-1">提示词</h3>
                             <p className="text-sm text-slate-200 bg-slate-800/50 p-2 rounded-md whitespace-pre-wrap break-words">{item.prompt || '无'}</p>

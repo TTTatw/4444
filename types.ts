@@ -26,6 +26,8 @@ export interface Node {
   height?: number;
   selectedModel?: string;
   locked?: boolean; // read-only if true (for private workflows not owned)
+  aspectRatio?: string;
+  resolution?: string;
 }
 
 export interface Connection {
@@ -35,12 +37,12 @@ export interface Connection {
 }
 
 export interface Group {
-    id: string;
-    name: string;
-    nodeIds: string[];
-    position: Point;
-    size: { width: number; height: number };
-    selected?: boolean;
+  id: string;
+  name: string;
+  nodeIds: string[];
+  position: Point;
+  size: { width: number; height: number };
+  selected?: boolean;
 }
 
 export interface ContextMenu {
@@ -79,6 +81,9 @@ export interface SerializedNode {
   width?: number;
   height?: number;
   selectedModel?: string;
+  aspectRatio?: string;
+  resolution?: string;
+  googleSearch?: boolean;
 }
 
 export interface SerializedConnection {
@@ -87,12 +92,12 @@ export interface SerializedConnection {
 }
 
 export interface WorkflowAsset {
-    id: string;
-    name: string;
-    tags: string[];
-    notes: string;
-    nodes: SerializedNode[]; 
-    connections: SerializedConnection[];
-    visibility?: 'public' | 'private';
-    ownerId?: string;
+  id: string;
+  name: string;
+  tags: string[];
+  notes: string;
+  nodes: SerializedNode[];
+  connections: SerializedConnection[];
+  visibility?: 'public' | 'private';
+  ownerId?: string;
 }

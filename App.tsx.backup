@@ -39,13 +39,11 @@ interface CanvasState {
 }
 
 const App: React.FC = () => {
-    // console.log('App component rendering...');
     // Core State
     const [nodes, setNodes] = useState<Node[]>([]);
     const [connections, setConnections] = useState<ConnectionType[]>([]);
     const [groups, setGroups] = useState<Group[]>([]);
     const [history, setHistory] = useState<HistoryItem[]>([]);
-    const [sessionHistory, setSessionHistory] = useState<HistoryItem[]>([]); // Session-only (max 20)
     const [assets, setAssets] = useState<WorkflowAsset[]>([]);
     const supabaseEnabled = isSupabaseConfigured();
     const [apiKey, setApiKey] = useState<string | null>(null);
@@ -97,10 +95,7 @@ const App: React.FC = () => {
     const [viewerContent, setViewerContent] = useState<{ type: NodeType, content: string, name: string } | null>(null);
     const [selectedHistoryItem, setSelectedHistoryItem] = useState<HistoryItem | null>(null);
     const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
-    const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
     const [historyModalSelection, setHistoryModalSelection] = useState<Set<string>>(new Set());
-    const [historyPage, setHistoryPage] = useState(1);
-    const [historyLoading, setHistoryLoading] = useState(false);
     const [isAssetLibraryOpen, setIsAssetLibraryOpen] = useState(false);
     const [isSaveAssetModalOpen, setIsSaveAssetModalOpen] = useState(false);
     const [groupToSave, setGroupToSave] = useState<Group | null>(null);
@@ -139,24 +134,6 @@ const App: React.FC = () => {
             window.removeEventListener('keydown', preventKeyZoom);
         };
     }, []);
-
-    // Load History from DB
-    useEffect(() => {
-        const loadHistory = async () => {
-            if (!currentUser.id) return;
-            setHistoryLoading(true);
-            try {
-                // Load top 10 history items for the gallery to prevent timeout
-                const { data } = await fetchHistoryItems(1, 10);
-                setHistory(data);
-            } catch (e) {
-                console.error("Failed to load history", e);
-            } finally {
-                setHistoryLoading(false);
-            }
-        };
-        loadHistory();
-    }, [currentUser.id]);
 
     const zoomAroundPoint = useCallback((newZoom: number, pointer?: { x: number; y: number }) => {
         const rect = canvasRef.current?.getBoundingClientRect();
@@ -394,33 +371,14 @@ const App: React.FC = () => {
             const drag = groupDragRef.current;
             const group = groupsRef.current.find(g => g.id === drag.id);
             if (!group) return;
-            const canvasX = (e.clientX - pan.x) / zoom;
-            const canvasY = (e.clientY - pan.y) / zoom;
-            const newX = canvasX - drag.offset.x;
-            const newY = canvasY - drag.offset.y;
-
-            // Calculate total delta from initial position
-            const totalDeltaX = newX - drag.initialGroupPosition.x;
-            const totalDeltaY = newY - drag.initialGroupPosition.y;
-
-            if (Math.abs(totalDeltaX) > 0 || Math.abs(totalDeltaY) > 0) {
+            const newX = (e.clientX - pan.x - drag.offset.x) / zoom;
+            const newY = (e.clientY - pan.y - drag.offset.y) / zoom;
+            const deltaX = newX - group.position.x;
+            const deltaY = newY - group.position.y;
+            if (Math.abs(deltaX) > 0 || Math.abs(deltaY) > 0) {
                 interactionState.current.hasDragged = true;
                 setGroups(gs => gs.map(g => g.id === drag.id ? { ...g, position: { x: newX, y: newY } } : g));
-
-                // Update nodes based on initial position + total delta
-                setNodes(ns => ns.map(n => {
-                    if (group.nodeIds.includes(n.id) && drag.initialNodePositions[n.id]) {
-                        const initialPos = drag.initialNodePositions[n.id];
-                        return {
-                            ...n,
-                            position: {
-                                x: initialPos.x + totalDeltaX,
-                                y: initialPos.y + totalDeltaY
-                            }
-                        };
-                    }
-                    return n;
-                }));
+                setNodes(ns => ns.map(n => group.nodeIds.includes(n.id) ? { ...n, position: { x: n.position.x + deltaX, y: n.position.y + deltaY } } : n));
             }
         } else if (dragStateRef.current) {
             interactionState.current.hasDragged = true;
@@ -705,26 +663,12 @@ const App: React.FC = () => {
 
         const group = groupsRef.current.find(g => g.id === groupId);
         if (group) {
-            const canvasX = (e.clientX - pan.x) / zoom;
-            const canvasY = (e.clientY - pan.y) / zoom;
-
-            // Store initial positions of all nodes in the group to prevent drift
-            const initialNodePositions = {};
-            group.nodeIds.forEach(nodeId => {
-                const node = nodesRef.current.find(n => n.id === nodeId);
-                if (node) {
-                    initialNodePositions[nodeId] = { ...node.position };
-                }
-            });
-
             groupDragRef.current = {
                 id: groupId,
                 offset: {
-                    x: canvasX - group.position.x,
-                    y: canvasY - group.position.y,
-                },
-                initialGroupPosition: { ...group.position },
-                initialNodePositions
+                    x: e.clientX - (group.position.x * zoom + pan.x),
+                    y: e.clientY - (group.position.y * zoom + pan.y),
+                }
             };
         }
         e.preventDefault();
@@ -756,9 +700,6 @@ const App: React.FC = () => {
             width: node.width,
             height: node.height,
             selectedModel: node.selectedModel,
-            aspectRatio: node.aspectRatio,
-            resolution: node.resolution,
-            googleSearch: node.googleSearch,
         }));
         const serializableConnections: SerializedConnection[] = selectedConnections.map(({ from, to }) => ({ fromNode: from, toNode: to }));
 
@@ -827,8 +768,8 @@ const App: React.FC = () => {
         if (nodesToGroup.length < 2) return;
         recordHistory();
 
-        const PADDING = 60; // Increased padding
-        const HEADER_SPACE = 40; // Increased header space
+        const PADDING = 40;
+        const HEADER_SPACE = 30; // Extra space for node headers to prevent overlap
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
         nodesToGroup.forEach(node => {
@@ -884,9 +825,6 @@ const App: React.FC = () => {
 
         const inputConnections = connectionsRef.current.filter(c => c.to === nodeId);
         const inputNodes = nodesRef.current.filter(n => inputConnections.some(c => c.from === n.id));
-        // Sort inputs by X position (left to right)
-        inputNodes.sort((a, b) => a.position.x - b.position.x);
-
         const inputs = inputNodes.map(n => ({ type: n.type, data: n.type === 'image' ? n.inputImage : n.content }));
 
         // A node's own image should only be an input if it's a root node (no inputs),
@@ -906,12 +844,7 @@ const App: React.FC = () => {
                 nodeToExecute.type,
                 inputs,
                 nodeToExecute.selectedModel,
-                apiKey || undefined,
-                {
-                    aspectRatio: nodeToExecute.aspectRatio,
-                    resolution: nodeToExecute.resolution,
-                    googleSearch: nodeToExecute.googleSearch
-                }
+                apiKey || undefined
             );
 
             if (result.type === 'image') {
@@ -926,7 +859,6 @@ const App: React.FC = () => {
                 const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
                 const historyItem: HistoryItem = { id: `hist-${Date.now()}`, timestamp: new Date(), image: result.content, prompt: instructionToUse, context, nodeName: nodeToExecute.name, ownerId: currentUser.id };
                 setHistory(h => [historyItem, ...h]);
-                setSessionHistory(sh => [historyItem, ...sh].slice(0, 20)); // Max 20
                 if (supabaseEnabled) {
                     insertHistoryItem(historyItem, currentUser.id).catch(err => console.error("Supabase history insert failed:", err));
                 }
@@ -986,7 +918,10 @@ const App: React.FC = () => {
                     // It's a root node. If it ran before (status=success), the inputImage currently holds the OUTPUT of that run.
                     // We DO NOT want to feed that output back in as input for a text-to-image gen.
                     // BUT, if it's an img2img workflow, maybe we do?
-                    // FIX: Never clear inputImage for root nodes. If it was an output from previous run, it's now the input for this run.
+                    // Heuristic: If it has an instruction and is an image node, and status is success, assume previous run was T2I and clear.
+                    if (node.type === 'image' && node.instruction) {
+                        cleanNode.inputImage = null;
+                    }
                 }
             }
             executionData.set(node.id, cleanNode);
@@ -1019,6 +954,8 @@ const App: React.FC = () => {
             }
             return n;
         }));
+
+        const newHistoryItems: HistoryItem[] = [];
 
         // 3. Parallel Execution Function
         const triggerNode = async (nodeId: string) => {
@@ -1065,9 +1002,6 @@ const App: React.FC = () => {
                         .map(c => executionData.get(c.from))
                         .filter(n => n !== undefined) as Node[];
 
-                    // Sort inputs by X position (left to right)
-                    inputNodesData.sort((a, b) => a.position.x - b.position.x);
-
                     const inputs = inputNodesData.map(n => ({
                         type: n.type,
                         data: n.type === 'image' ? n.inputImage : n.content
@@ -1084,12 +1018,7 @@ const App: React.FC = () => {
                         currentNodeData.type,
                         inputs,
                         currentNodeData.selectedModel,
-                        apiKey || undefined,
-                        {
-                            aspectRatio: currentNodeData.aspectRatio,
-                            resolution: currentNodeData.resolution,
-                            googleSearch: currentNodeData.googleSearch
-                        }
+                        apiKey || undefined
                     );
 
                     // Update Local Data
@@ -1108,12 +1037,7 @@ const App: React.FC = () => {
                             nodeName: currentNodeData.name,
                             ownerId: currentUser.id,
                         };
-                        // Immediate Save
-                        setHistory(h => [histItem, ...h]);
-                        setSessionHistory(sh => [histItem, ...sh].slice(0, 20));
-                        if (supabaseEnabled) {
-                            insertHistoryItem(histItem, currentUser.id).catch(err => console.error("Supabase history insert failed:", err));
-                        }
+                        newHistoryItems.push(histItem);
                     } else {
                         updatedNode.content = result.content;
                         if (currentNodeData.type === 'image') {
@@ -1157,7 +1081,13 @@ const App: React.FC = () => {
                     });
                 }
 
-                // Remove connections highlights (Subtractive)
+                if (newHistoryItems.length > 0) {
+                    setHistory(h => [...newHistoryItems.filter(item => !h.some(existing => existing.id === item.id)).reverse(), ...h]);
+                    if (supabaseEnabled) {
+                        newHistoryItems.forEach(item => insertHistoryItem({ ...item, ownerId: currentUser.id }, currentUser.id).catch(err => console.error("Supabase history insert failed:", err)));
+                    }
+                    newHistoryItems.length = 0;
+                }
             }
         };
 
@@ -1831,10 +1761,6 @@ const App: React.FC = () => {
                 )
             }
 
-            {/* Add API Key Selection Button here if needed based on platform, 
-                though gemini-3-pro-image-preview requires it, 
-                for now assuming environment key is valid or handled elsewhere 
-                to minimize UI clutter as per prompt request to only add model selection. */}
 
             <div className={`absolute top-0 left-0 w-full h-full ${currentUser.role === 'guest' ? 'pointer-events-none opacity-10 blur-sm' : 'pointer-events-none'}`} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
                 <svg width="100%" height="100%" className="absolute top-0 left-0 overflow-visible pointer-events-none">
@@ -1925,19 +1851,6 @@ const App: React.FC = () => {
                                 <h3 className="text-lg font-semibold text-white">历史图库</h3>
                                 <div className="flex items-center gap-2">
                                     <button
-                                        onClick={() => {
-                                            const displayed = history.slice(0, historyPage * 20);
-                                            if (historyModalSelection.size === displayed.length) {
-                                                setHistoryModalSelection(new Set());
-                                            } else {
-                                                setHistoryModalSelection(new Set(displayed.map(i => i.id)));
-                                            }
-                                        }}
-                                        className="px-3 py-1 rounded text-sm bg-slate-600 text-white hover:bg-slate-500"
-                                    >
-                                        全选
-                                    </button>
-                                    <button
                                         disabled={historyModalSelection.size === 0}
                                         onClick={() => handleBulkDeleteHistory(Array.from(historyModalSelection))}
                                         className={`px-3 py-1 rounded text-sm ${historyModalSelection.size === 0 ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-500'}`}
@@ -1961,39 +1874,10 @@ const App: React.FC = () => {
                                     <button onClick={() => setIsHistoryModalOpen(false)} className="text-slate-300 hover:text-white">&times;</button>
                                 </div>
                             </div>
-                            <div
-                                className="overflow-y-auto custom-scrollbar grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3"
-                                onScroll={(e) => {
-                                    const target = e.currentTarget;
-                                    if (target.scrollHeight - target.scrollTop <= target.clientHeight + 50 && !historyLoading && historyPage * 20 < history.length) {
-                                        setHistoryLoading(true);
-                                        setTimeout(() => {
-                                            setHistoryPage(p => p + 1);
-                                            setHistoryLoading(false);
-                                        }, 300);
-                                    }
-                                }}
-                            >
-                                {history.slice(0, historyPage * 20).map(item => (
-                                    <div
-                                        key={item.id}
-                                        className={`relative bg-slate-800/70 border ${historyModalSelection.has(item.id) ? 'border-sky-500' : 'border-slate-700'} rounded-lg overflow-hidden cursor-pointer`}
-                                        style={{ aspectRatio: '3/4' }}
-                                        onClick={(e) => {
-                                            if (e.ctrlKey || e.metaKey) {
-                                                e.preventDefault();
-                                                setHistoryModalSelection(prev => {
-                                                    const next = new Set(prev);
-                                                    if (next.has(item.id)) next.delete(item.id);
-                                                    else next.add(item.id);
-                                                    return next;
-                                                });
-                                            } else if (!(e.target as HTMLElement).closest('input[type="checkbox"]')) {
-                                                setSelectedHistoryItem(item);
-                                            }
-                                        }}
-                                    >
-                                        <div className="absolute top-2 left-2 z-10">
+                            <div className="overflow-y-auto custom-scrollbar grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                                {history.map(item => (
+                                    <div key={item.id} className={`relative bg-slate-800/70 border ${historyModalSelection.has(item.id) ? 'border-sky-500' : 'border-slate-700'} rounded-lg overflow-hidden`}>
+                                        <div className="absolute top-2 left-2">
                                             <input
                                                 type="checkbox"
                                                 checked={historyModalSelection.has(item.id)}
@@ -2004,16 +1888,15 @@ const App: React.FC = () => {
                                                         return next;
                                                     });
                                                 }}
-                                                className="w-5 h-5 cursor-pointer"
-                                                onClick={(e) => e.stopPropagation()}
                                             />
                                         </div>
-                                        <img src={`data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-full object-cover" />
+                                        <img src={`data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-40 object-cover" />
+                                        <div className="p-2 text-sm text-slate-200 space-y-1">
+                                            <p className="font-semibold line-clamp-1">{item.nodeName}</p>
+                                            <p className="text-xs text-slate-400 line-clamp-2">{item.prompt}</p>
+                                        </div>
                                     </div>
                                 ))}
-                                {historyLoading && (
-                                    <div className="col-span-full text-center py-4 text-slate-400">加载中...</div>
-                                )}
                             </div>
                         </div>
                     </div>
@@ -2049,10 +1932,10 @@ const App: React.FC = () => {
                 onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
                 onOpenAuthModal={() => setIsAccountModalOpen(true)}
                 onOpenAdminDashboard={() => setIsAdminDashboardOpen(true)}
-                history={sessionHistory}
+                history={visibleHistory}
                 onSelectHistory={setSelectedHistoryItem}
-                onClearHistory={() => setSessionHistory([])}
-                onDeleteHistory={(id) => setSessionHistory(sh => sh.filter(item => item.id !== id))}
+                onClearHistory={handleClearHistory}
+                onDeleteHistory={handleDeleteHistoryItem}
                 zoom={zoom}
                 onZoomChange={(z) => zoomAroundPoint(z)}
             />

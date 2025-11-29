@@ -3,16 +3,37 @@ import type { NodeType } from '../types';
 import { supabaseAuth } from './storageService';
 
 // Helper to build parts (kept for compatibility with existing logic)
-const buildParts = (inputs: Input[], instruction: string): Part[] => {
+const buildParts = async (inputs: Input[], instruction: string): Promise<Part[]> => {
     const parts: Part[] = [];
     // Add all inputs first (text and images)
     for (const input of inputs) {
         if (input.data) {
             if (input.type === 'image') {
+                let base64Data = input.data;
+                // If input is a URL (from Supabase Storage), fetch and convert to base64
+                if (input.data.startsWith('http')) {
+                    try {
+                        const response = await fetch(input.data);
+                        const blob = await response.blob();
+                        base64Data = await new Promise((resolve) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                                const base64 = (reader.result as string).split(',')[1];
+                                resolve(base64);
+                            };
+                            reader.readAsDataURL(blob);
+                        });
+                    } catch (e) {
+                        console.error("Failed to fetch image from URL:", input.data, e);
+                        // Skip this image or handle error? For now, we skip.
+                        continue;
+                    }
+                }
+
                 parts.push({
                     inlineData: {
                         mimeType: 'image/png', // Assuming png for simplicity
-                        data: input.data,
+                        data: base64Data,
                     },
                 });
             } else {
@@ -63,7 +84,8 @@ export const runNode = async (
     nodeType: NodeType,
     inputs: Input[],
     model?: string,
-    apiKeyOverride?: string
+    apiKeyOverride?: string,
+    options?: { aspectRatio?: string; resolution?: string; googleSearch?: boolean }
 ): Promise<NodeResult> => {
     try {
         // 1. Get Auth Token
@@ -75,13 +97,13 @@ export const runNode = async (
         }
 
         // 2. Prepare Payload
-        const parts = buildParts(inputs, instruction);
+        const parts = await buildParts(inputs, instruction);
         if (parts.length === 0) {
             throw new Error("错误：无法生成。节点需要指令或上游输入才能运行。");
         }
 
         const textPrompt = parts.filter(p => p.text).map(p => p.text).join('\n\n');
-        const imagePart = parts.find(p => p.inlineData); // Currently backend handles one image well
+        const imagePart = parts.find(p => p.inlineData);
 
         // Default models
         let selectedModel = model;
@@ -91,6 +113,48 @@ export const runNode = async (
 
         const API_BASE = import.meta.env.VITE_API_URL || 'https://4444-production.up.railway.app';
 
+        // Construct payload
+        const payload: any = {
+            model: selectedModel,
+            prompt: textPrompt,
+            image: imagePart,
+            systemInstruction: "You are a helpful AI assistant.",
+            safetySettings: [
+                { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
+            ]
+        };
+
+        // Add Image Config & Response Modalities
+        if (nodeType === 'image' || options?.aspectRatio || options?.resolution) {
+            // Force image modality for image nodes
+            if (nodeType === 'image') {
+                payload.response_modalities = ['IMAGE'];
+                delete payload.systemInstruction;
+            }
+
+            if (options?.aspectRatio || options?.resolution) {
+                payload.image_config = {};
+
+                if (options?.aspectRatio) {
+                    payload.image_config.aspect_ratio = options.aspectRatio;
+                }
+
+                if (options?.resolution) {
+                    payload.image_config.image_size = options.resolution;
+                }
+
+                payload.image_config.sample_count = 1;
+            }
+        }
+
+        // Add Tools (Google Search)
+        if (options?.googleSearch) {
+            payload.tools = [{ google_search: {} }];
+        }
+
         // 3. Call Backend Proxy
         const response = await fetch(`${API_BASE}/api/generate`, {
             method: 'POST',
@@ -98,12 +162,7 @@ export const runNode = async (
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}`
             },
-            body: JSON.stringify({
-                model: selectedModel,
-                prompt: textPrompt,
-                image: imagePart, // Send the Part object directly
-                systemInstruction: "You are a helpful AI assistant."
-            })
+            body: JSON.stringify(payload)
         });
 
         if (!response.ok) {
@@ -120,12 +179,21 @@ export const runNode = async (
         const data = await response.json();
 
         // 4. Handle Response
-        if (data.image) {
-            return { type: 'image', content: data.image };
+        if (nodeType === 'image') {
+            if (data.image) {
+                return { type: 'image', content: data.image };
+            }
+            if (data.text) {
+                throw new Error(`生成失败 (模型返回了文本而非图片): ${data.text}`);
+            }
+            throw new Error("生成失败: 未收到图片数据。");
         }
 
         if (data.text) {
             return { type: 'text', content: data.text };
+        }
+        if (data.image) {
+            throw new Error("生成失败: 文本节点收到了图片数据。");
         }
 
         throw new Error("后端返回了无法识别的数据格式。");
