@@ -44,7 +44,15 @@ const authGuard = async (req, res, next) => {
     return res.status(403).json({ error: 'Invalid or expired token' });
   }
 
-  req.user = user;
+  // Fetch user profile to get the actual role
+  const { data: profile } = await supabaseAdmin
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single();
+
+  // Attach profile role to user object (fallback to 'user' if no profile/role)
+  req.user = { ...user, role: profile?.role || 'user' };
   next();
 };
 
