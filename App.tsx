@@ -406,6 +406,18 @@ const App: React.FC = () => {
             if (Math.abs(totalDeltaX) > 0 || Math.abs(totalDeltaY) > 0) {
                 interactionState.current.hasDragged = true;
                 setGroups(gs => gs.map(g => g.id === drag.id ? { ...g, position: { x: newX, y: newY } } : g));
+                setNodes(ns => ns.map(n => {
+                    if (drag.initialNodePositions[n.id]) {
+                        return {
+                            ...n,
+                            position: {
+                                x: drag.initialNodePositions[n.id].x + totalDeltaX,
+                                y: drag.initialNodePositions[n.id].y + totalDeltaY
+                            }
+                        };
+                    }
+                    return n;
+                }));
             }
         } else if (dragStateRef.current) {
             interactionState.current.hasDragged = true;
