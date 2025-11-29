@@ -104,6 +104,130 @@ app.get('/api/admin/logs', authGuard, async (req, res) => {
   }
 });
 
+// --- History Endpoints ---
+app.get('/api/history', authGuard, async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const from = (page - 1) * limit;
+    const to = from + Number(limit) - 1;
+    const userId = req.user.id;
+
+    const { data, error, count } = await supabaseAdmin
+      .from('history_items')
+      .select('*', { count: 'exact' })
+      .eq('owner_id', userId)
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (error) throw error;
+
+    res.json({ data, count });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch history', detail: err.message });
+  }
+});
+
+app.post('/api/history', authGuard, async (req, res) => {
+  try {
+    const item = req.body;
+    // Ensure owner_id is set to the authenticated user
+    item.owner_id = req.user.id;
+
+    const { error } = await supabaseAdmin
+      .from('history_items')
+      .upsert(item);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save history', detail: err.message });
+  }
+});
+
+app.delete('/api/history/:id', authGuard, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    const { error } = await supabaseAdmin
+      .from('history_items')
+      .delete()
+      .eq('id', id)
+      .eq('owner_id', userId); // Ensure user owns the item
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete history', detail: err.message });
+  }
+});
+
+// --- User Endpoints (Simple Proxy) ---
+app.get('/api/users', authGuard, async (req, res) => {
+  // Only allow admin or specific logic? For now, let's just list profiles or similar.
+  // storageService.ts seems to use this for a simple user list.
+  // Assuming 'profiles' table or similar.
+  try {
+    // If this is for admin purposes
+    if (req.user.role !== 'admin') {
+      // If not admin, maybe return just self? Or empty?
+      // storageService.ts seems to imply a list of users for authorization management?
+      // Let's return empty for non-admins to be safe, or check requirement.
+      // The frontend code uses this in AccountModal to list "Authorized Users".
+      // Let's assume it's for admin use.
+    }
+
+    const { data: users, error } = await supabaseAdmin
+      .from('profiles')
+      .select('id, email, role, created_at'); // Select safe fields
+
+    if (error) throw error;
+
+    // Map to format expected by frontend if needed, or just return
+    // Frontend expects { users: [...] }
+    res.json({ users: users.map(u => ({ id: u.id, name: u.email, password: '', email: u.email })) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch users', detail: err.message });
+  }
+});
+
+app.post('/api/users', authGuard, async (req, res) => {
+  // Creating a user usually means signing them up or adding to a whitelist.
+  // Since we use Supabase Auth, we can't just "insert" a user easily without admin API.
+  // But here we might be just adding to a profiles table?
+  // storageService.ts sends { email, password, role }.
+  // This looks like an admin function to create a new user.
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+
+  try {
+    const { email, password } = req.body;
+    const { data, error } = await supabaseAdmin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true
+    });
+    if (error) throw error;
+
+    // Profile creation should be handled by trigger, but we can ensure it exists
+    // ...
+    res.json({ success: true, user: data.user });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create user', detail: err.message });
+  }
+});
+
+app.delete('/api/users/:id', authGuard, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  try {
+    const { id } = req.params;
+    const { error } = await supabaseAdmin.auth.admin.deleteUser(id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete user', detail: err.message });
+  }
+});
+
 // --- Proxy Generation Endpoint ---
 app.post('/api/generate', authGuard, async (req, res) => {
   // Extract all necessary fields including image_config and tools
