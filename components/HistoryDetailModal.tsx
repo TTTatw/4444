@@ -18,11 +18,26 @@ export const HistoryDetailModal: React.FC<Props> = ({ item, onClose }) => {
 
     const [dimensions, setDimensions] = React.useState<{ width: number; height: number } | null>(null);
 
-    const handleDownload = useCallback(() => {
+    const handleDownload = useCallback(async () => {
         const link = document.createElement('a');
-        link.href = `data:image/png;base64,${item.image}`;
         link.download = `${item.nodeName.replace(/\s+/g, '_') || 'history_image'}.png`;
-        link.click();
+
+        if (item.image.startsWith('http')) {
+            try {
+                const response = await fetch(item.image);
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                link.href = url;
+                link.click();
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                console.error("Download failed", e);
+                window.open(item.image, '_blank');
+            }
+        } else {
+            link.href = `data:image/png;base64,${item.image}`;
+            link.click();
+        }
     }, [item.image, item.nodeName]);
 
     return (
@@ -39,7 +54,7 @@ export const HistoryDetailModal: React.FC<Props> = ({ item, onClose }) => {
                 {/* Image Panel */}
                 <div className="flex-1 flex items-center justify-center p-4 bg-black/20">
                     <img
-                        src={`data:image/png;base64,${item.image}`}
+                        src={item.image.startsWith('http') ? item.image : `data:image/png;base64,${item.image}`}
                         alt={item.nodeName}
                         className="max-w-full max-h-full object-contain rounded-md"
                         onLoad={(e) => setDimensions({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}

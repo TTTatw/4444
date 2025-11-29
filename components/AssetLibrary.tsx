@@ -93,46 +93,46 @@ export const AssetLibrary: React.FC<Props> = ({ assets, onClose, onAdd, onDownlo
                         </div>
                     ) : tab === 'preset' ? (
                         <div className="max-h-[60vh] overflow-y-auto custom-scrollbar">
-                        <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
-                            {filteredAssets.map(asset => {
-                                const preview = getPreview(asset);
-                                return (
-                                    <div key={asset.id} className="relative bg-slate-800/80 rounded-xl border border-slate-700 overflow-hidden hover:border-sky-500 transition-colors group flex flex-col">
-                                        <div className="relative w-full" style={{ aspectRatio: '3 / 4' }}>
-                                            {preview ? (
-                                                preview.type === 'image' ? (
-                                                    <img src={`data:image/png;base64,${preview.value}`} alt={asset.name} className="w-full h-full object-cover" />
+                            <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                                {filteredAssets.map(asset => {
+                                    const preview = getPreview(asset);
+                                    return (
+                                        <div key={asset.id} className="relative bg-slate-800/80 rounded-xl border border-slate-700 overflow-hidden hover:border-sky-500 transition-colors group flex flex-col">
+                                            <div className="relative w-full" style={{ aspectRatio: '3 / 4' }}>
+                                                {preview ? (
+                                                    preview.type === 'image' ? (
+                                                        <img src={preview.value.startsWith('http') ? preview.value : `data:image/png;base64,${preview.value}`} alt={asset.name} className="w-full h-full object-cover" />
+                                                    ) : (
+                                                        <p className="text-slate-200 text-xs px-3 py-2 line-clamp-5">{preview.value}</p>
+                                                    )
                                                 ) : (
-                                                    <p className="text-slate-200 text-xs px-3 py-2 line-clamp-5">{preview.value}</p>
-                                                )
-                                            ) : (
-                                                <p className="text-slate-500 text-xs flex items-center justify-center h-full">无预览</p>
-                                            )}
-                                            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
-                                                <button
-                                                    onClick={() => { onAdd(asset); onClose(); }}
-                                                    className="px-3 py-1 rounded-lg bg-sky-500 text-white text-sm"
-                                                >
-                                                    使用
-                                                </button>
+                                                    <p className="text-slate-500 text-xs flex items-center justify-center h-full">无预览</p>
+                                                )}
+                                                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
+                                                    <button
+                                                        onClick={() => { onAdd(asset); onClose(); }}
+                                                        className="px-3 py-1 rounded-lg bg-sky-500 text-white text-sm"
+                                                    >
+                                                        使用
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div className="p-2 space-y-1">
+                                                <p className="text-xs font-semibold text-white line-clamp-1">{asset.name}</p>
+                                                <div className="flex flex-wrap gap-1">
+                                                    {(asset.tags || ['无标签']).map(tag => (
+                                                        <span key={tag} className="text-[9px] bg-slate-700 text-slate-200 px-2 py-0.5 rounded-full">{tag}</span>
+                                                    ))}
+                                                </div>
+                                                <div className="flex items-center justify-end gap-2">
+                                                    <button onClick={() => onDownload(asset)} className="p-1 text-slate-300 hover:bg-slate-600 rounded-md" title="下载"><DownloadIcon /></button>
+                                                    <button onClick={() => onDelete(asset.id)} className="p-1 text-red-400 hover:bg-red-500/20 rounded-md" title="删除"><DeleteIcon /></button>
+                                                </div>
                                             </div>
                                         </div>
-                                        <div className="p-2 space-y-1">
-                                            <p className="text-xs font-semibold text-white line-clamp-1">{asset.name}</p>
-                                            <div className="flex flex-wrap gap-1">
-                                                {(asset.tags || ['无标签']).map(tag => (
-                                                    <span key={tag} className="text-[9px] bg-slate-700 text-slate-200 px-2 py-0.5 rounded-full">{tag}</span>
-                                                ))}
-                                            </div>
-                                            <div className="flex items-center justify-end gap-2">
-                                                <button onClick={() => onDownload(asset)} className="p-1 text-slate-300 hover:bg-slate-600 rounded-md" title="下载"><DownloadIcon /></button>
-                                                <button onClick={() => onDelete(asset.id)} className="p-1 text-red-400 hover:bg-red-500/20 rounded-md" title="删除"><DeleteIcon /></button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
+                                    );
+                                })}
+                            </div>
                         </div>
                     ) : (
                         <ul className="space-y-2">

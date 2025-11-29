@@ -36,7 +36,7 @@ export const HistoryTray: React.FC<Props> = ({ history, onSelect, onClearAll, on
                             onClick={() => onSelect(item)}
                         >
                             <img
-                                src={`data:image/png;base64,${item.image}`}
+                                src={item.image.startsWith('http') ? item.image : `data:image/png;base64,${item.image}`}
                                 alt={item.nodeName}
                                 className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
                             />
