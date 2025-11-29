@@ -1947,234 +1947,253 @@ const App: React.FC = () => {
                                     <button
                                         disabled={historyModalSelection.size === 0}
                                         onClick={() => {
-                                            history.filter(h => historyModalSelection.has(h.id)).forEach(item => {
+                                            onClick = { async() => {
+                                            const selectedItems = history.filter(h => historyModalSelection.has(h.id));
+                                    for (const item of selectedItems) {
                                                 const a = document.createElement('a');
-                                                a.href = `data:image/png;base64,${item.image}`;
-                                                a.download = `${item.nodeName || 'history'}.png`;
-                                                a.click();
-                                            });
-                                        }}
-                                        className={`px-3 py-1 rounded text-sm ${historyModalSelection.size === 0 ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-slate-600 text-white hover:bg-slate-500'}`}
-                                    >
-                                        下载选中
-                                    </button>
-                                    <button onClick={() => setIsHistoryModalOpen(false)} className="text-slate-300 hover:text-white">&times;</button>
-                                </div>
-                            </div>
-                            <div
-                                className="overflow-y-auto custom-scrollbar grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3"
-                                onScroll={(e) => {
-                                    const target = e.currentTarget;
-                                    if (target.scrollHeight - target.scrollTop <= target.clientHeight + 50 && !historyLoading && historyPage * 20 < history.length) {
-                                        setHistoryLoading(true);
-                                        setTimeout(() => {
-                                            setHistoryPage(p => p + 1);
-                                            setHistoryLoading(false);
-                                        }, 300);
-                                    }
-                                }}
-                            >
-                                {history.slice(0, historyPage * 20).map(item => (
-                                    <div
-                                        key={item.id}
-                                        className={`relative bg-slate-800/70 border ${historyModalSelection.has(item.id) ? 'border-sky-500' : 'border-slate-700'} rounded-lg overflow-hidden cursor-pointer`}
-                                        style={{ aspectRatio: '3/4' }}
-                                        onClick={(e) => {
-                                            if (e.ctrlKey || e.metaKey) {
-                                                e.preventDefault();
-                                                setHistoryModalSelection(prev => {
-                                                    const next = new Set(prev);
-                                                    if (next.has(item.id)) next.delete(item.id);
-                                                    else next.add(item.id);
-                                                    return next;
-                                                });
-                                            } else if (!(e.target as HTMLElement).closest('input[type="checkbox"]')) {
-                                                setSelectedHistoryItem(item);
+                                    a.download = `${item.nodeName || 'history'}.png`;
+                                    if (item.image.startsWith('http')) {
+                                                    try {
+                                                        const response = await fetch(item.image);
+                                    const blob = await response.blob();
+                                    const url = URL.createObjectURL(blob);
+                                    a.href = url;
+                                    a.click();
+                                    URL.revokeObjectURL(url);
+                                                    } catch (e) {
+                                        console.error("Download failed", e);
+                                    window.open(item.image, '_blank');
+                                                    }
+                                                } else {
+                                        a.href = `data:image/png;base64,${item.image}`;
+                                    a.click();
+                                                }
+                                                await new Promise(r => setTimeout(r, 500));
                                             }
                                         }}
+                                    className={`px-3 py-1 rounded text-sm ${historyModalSelection.size === 0 ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-slate-600 text-white hover:bg-slate-500'}`}
                                     >
-                                        <div className="absolute top-2 left-2 z-10">
-                                            <input
-                                                type="checkbox"
-                                                checked={historyModalSelection.has(item.id)}
-                                                onChange={(e) => {
-                                                    setHistoryModalSelection(prev => {
-                                                        const next = new Set(prev);
-                                                        if (e.target.checked) next.add(item.id); else next.delete(item.id);
-                                                        return next;
-                                                    });
-                                                }}
-                                                className="w-5 h-5 cursor-pointer"
-                                                onClick={(e) => e.stopPropagation()}
-                                            />
-                                        </div>
-                                        <img src={`data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-full object-cover" />
-                                    </div>
-                                ))}
-                                {historyLoading && (
-                                    <div className="col-span-full text-center py-4 text-slate-400">加载中...</div>
-                                )}
+                                    下载选中
+                                </button>
+                                <button onClick={() => setIsHistoryModalOpen(false)} className="text-slate-300 hover:text-white">&times;</button>
                             </div>
+                        </div>
+                        <div
+                            className="overflow-y-auto custom-scrollbar grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3"
+                            onScroll={(e) => {
+                                const target = e.currentTarget;
+                                if (target.scrollHeight - target.scrollTop <= target.clientHeight + 50 && !historyLoading && historyPage * 20 < history.length) {
+                                    setHistoryLoading(true);
+                                    setTimeout(() => {
+                                        setHistoryPage(p => p + 1);
+                                        setHistoryLoading(false);
+                                    }, 300);
+                                }
+                            }}
+                        >
+                            {history.slice(0, historyPage * 20).map(item => (
+                                <div
+                                    key={item.id}
+                                    className={`relative bg-slate-800/70 border ${historyModalSelection.has(item.id) ? 'border-sky-500' : 'border-slate-700'} rounded-lg overflow-hidden cursor-pointer`}
+                                    style={{ aspectRatio: '3/4' }}
+                                    onClick={(e) => {
+                                        if (e.ctrlKey || e.metaKey) {
+                                            e.preventDefault();
+                                            setHistoryModalSelection(prev => {
+                                                const next = new Set(prev);
+                                                if (next.has(item.id)) next.delete(item.id);
+                                                else next.add(item.id);
+                                                return next;
+                                            });
+                                        } else if (!(e.target as HTMLElement).closest('input[type="checkbox"]')) {
+                                            setSelectedHistoryItem(item);
+                                        }
+                                    }}
+                                >
+                                    <div className="absolute top-2 left-2 z-10">
+                                        <input
+                                            type="checkbox"
+                                            checked={historyModalSelection.has(item.id)}
+                                            onChange={(e) => {
+                                                setHistoryModalSelection(prev => {
+                                                    const next = new Set(prev);
+                                                    if (e.target.checked) next.add(item.id); else next.delete(item.id);
+                                                    return next;
+                                                });
+                                            }}
+                                            className="w-5 h-5 cursor-pointer"
+                                            onClick={(e) => e.stopPropagation()}
+                                        />
+                                    </div>
+                                    <img src={item.image.startsWith('http') ? item.image : `data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-full object-cover" />
+                                </div>
+                            ))}
+                            {historyLoading && (
+                                <div className="col-span-full text-center py-4 text-slate-400">加载中...</div>
+                            )}
                         </div>
                     </div>
-                )
-            }
+                    </div>
+    )
+}
 
-            {
-                isAssetLibraryOpen && (
-                    <AssetLibrary
-                        assets={visibleAssets}
-                        onClose={() => setIsAssetLibraryOpen(false)}
-                        onAdd={addWorkflowToCanvas}
-                        onDownload={(asset) => {
-                            const payload = { ...asset, nodes: asset.nodes, connections: asset.connections };
-                            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload, null, 2));
-                            const a = document.createElement('a');
-                            a.href = dataStr;
-                            a.download = `${asset.name.replace(/\s/g, '_')}.json`;
-                            a.click();
-                        }}
-                        onDelete={handleDeleteAsset}
+{
+    isAssetLibraryOpen && (
+        <AssetLibrary
+            assets={visibleAssets}
+            onClose={() => setIsAssetLibraryOpen(false)}
+            onAdd={addWorkflowToCanvas}
+            onDownload={(asset) => {
+                const payload = { ...asset, nodes: asset.nodes, connections: asset.connections };
+                const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload, null, 2));
+                const a = document.createElement('a');
+                a.href = dataStr;
+                a.download = `${asset.name.replace(/\s/g, '_')}.json`;
+                a.click();
+            }}
+            onDelete={handleDeleteAsset}
+        />
+    )
+}
+
+{/* Portal overlay: toolbar, history tray, shortcuts */ }
+<UIOverlay
+    currentUser={currentUser}
+    onLogout={handleLogout}
+    onLoad={addWorkflowToCanvas}
+    onOpenLibrary={() => setIsAssetLibraryOpen(true)}
+    onOpenHistory={() => setIsHistoryModalOpen(true)}
+    onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
+    onOpenAuthModal={() => setIsAccountModalOpen(true)}
+    onOpenAdminDashboard={() => setIsAdminDashboardOpen(true)}
+    history={sessionHistory}
+    onSelectHistory={setSelectedHistoryItem}
+    onClearHistory={() => setSessionHistory([])}
+    onDeleteHistory={(id) => setSessionHistory(sh => sh.filter(item => item.id !== id))}
+    zoom={zoom}
+    onZoomChange={(z) => zoomAroundPoint(z)}
+/>
+
+{
+    isAdminDashboardOpen && currentUser.role === 'admin' && (
+        <AdminDashboard onClose={() => setIsAdminDashboardOpen(false)} currentUser={currentUser} />
+    )
+}
+
+{
+    isApiKeyModalOpen && currentUser.role === 'admin' && (
+        createPortal(
+            <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsApiKeyModalOpen(false)}>
+                <div className="bg-[#1f2937] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center justify-between">
+                        <h2 className="text-lg font-bold text-white">Set Gemini API Key</h2>
+                        <button onClick={() => setIsApiKeyModalOpen(false)} className="text-slate-400 hover:text-white">&times;</button>
+                    </div>
+                    <p className="text-sm text-slate-400">Key is stored locally in your browser (localStorage). Use a limited key for safety.</p>
+                    <input
+                        type="password"
+                        value={apiKeyDraft}
+                        onChange={e => setApiKeyDraft(e.target.value)}
+                        placeholder="Paste your Gemini API key"
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
-                )
-            }
+                    <div className="flex items-center justify-between text-xs text-slate-400">
+                        <span>Current: {apiKey ? 'saved locally' : 'not set'}</span>
+                        <button onClick={handleClearApiKey} className="text-red-400 hover:text-red-300">Clear</button>
+                    </div>
+                    <div className="flex justify-end space-x-2">
+                        <button onClick={() => setIsApiKeyModalOpen(false)} className="px-3 py-2 rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600">Cancel</button>
+                        <button onClick={handleSaveApiKey} className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500">Save</button>
+                    </div>
+                </div>
+            </div>,
+            document.body
+        )
+    )
+}
 
-            {/* Portal overlay: toolbar, history tray, shortcuts */}
-            <UIOverlay
-                currentUser={currentUser}
-                onLogout={handleLogout}
-                onLoad={addWorkflowToCanvas}
-                onOpenLibrary={() => setIsAssetLibraryOpen(true)}
-                onOpenHistory={() => setIsHistoryModalOpen(true)}
-                onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
-                onOpenAuthModal={() => setIsAccountModalOpen(true)}
-                onOpenAdminDashboard={() => setIsAdminDashboardOpen(true)}
-                history={sessionHistory}
-                onSelectHistory={setSelectedHistoryItem}
-                onClearHistory={() => setSessionHistory([])}
-                onDeleteHistory={(id) => setSessionHistory(sh => sh.filter(item => item.id !== id))}
-                zoom={zoom}
-                onZoomChange={(z) => zoomAroundPoint(z)}
-            />
+{
+    isAccountModalOpen && currentUser.role !== 'guest' && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsAccountModalOpen(false)}>
+            <div className="bg-[#0f1625] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-3xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="px-3 py-1 rounded-full bg-slate-800 text-slate-200 text-sm">账户信息</div>
+                        <div className="px-2 py-1 rounded-full text-xs border border-slate-600 text-slate-300">
+                            {currentUser.role === 'admin' ? '管理员' : '授权用户'}
+                        </div>
+                    </div>
+                    <button onClick={() => setIsAccountModalOpen(false)} className="text-slate-400 hover:text-white text-lg">&times;</button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="space-y-3">
+                        <p className="text-sm text-slate-300">邮箱：{currentUser.name}</p>
+                        <p className="text-sm text-slate-300">角色：{currentUser.role}</p>
+                    </div>
+                    {currentUser.role === 'admin' && (
+                        <div className="space-y-3">
+                            <h3 className="text-sm font-semibold text-slate-200">授权账号</h3>
+                            <input
+                                type="email"
+                                value={newUserEmail}
+                                onChange={e => setNewUserEmail(e.target.value)}
+                                placeholder="授权邮箱（Supabase 要求有效邮箱）"
+                                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                            <input
+                                type="password"
+                                value={newUserPassword}
+                                onChange={e => setNewUserPassword(e.target.value)}
+                                placeholder="设置密码"
+                                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                            <button
+                                onClick={handleCreateUser}
+                                className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 text-sm w-fit"
+                            >
+                                创建授权账号
+                            </button>
+                            <p className="text-xs text-slate-400 leading-5">
+                                创建后用户将直接写入 Supabase Auth，请确保邮箱/密码有效。<br />
+                                如果需要查看/删除授权用户，可在 Supabase 控制台的 Authentication → Users 中操作（支持备注）。
+                            </p>
 
-            {isAdminDashboardOpen && currentUser.role === 'admin' && (
-                <AdminDashboard onClose={() => setIsAdminDashboardOpen(false)} currentUser={currentUser} />
-            )}
-
-            {
-                isApiKeyModalOpen && currentUser.role === 'admin' && (
-                    createPortal(
-                        <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsApiKeyModalOpen(false)}>
-                            <div className="bg-[#1f2937] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
-                                <div className="flex items-center justify-between">
-                                    <h2 className="text-lg font-bold text-white">Set Gemini API Key</h2>
-                                    <button onClick={() => setIsApiKeyModalOpen(false)} className="text-slate-400 hover:text-white">&times;</button>
-                                </div>
-                                <p className="text-sm text-slate-400">Key is stored locally in your browser (localStorage). Use a limited key for safety.</p>
-                                <input
-                                    type="password"
-                                    value={apiKeyDraft}
-                                    onChange={e => setApiKeyDraft(e.target.value)}
-                                    placeholder="Paste your Gemini API key"
-                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                />
-                                <div className="flex items-center justify-between text-xs text-slate-400">
-                                    <span>Current: {apiKey ? 'saved locally' : 'not set'}</span>
-                                    <button onClick={handleClearApiKey} className="text-red-400 hover:text-red-300">Clear</button>
-                                </div>
-                                <div className="flex justify-end space-x-2">
-                                    <button onClick={() => setIsApiKeyModalOpen(false)} className="px-3 py-2 rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600">Cancel</button>
-                                    <button onClick={handleSaveApiKey} className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500">Save</button>
-                                </div>
-                            </div>
-                        </div>,
-                        document.body
-                    )
-                )
-            }
-
-            {
-                isAccountModalOpen && currentUser.role !== 'guest' && createPortal(
-                    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsAccountModalOpen(false)}>
-                        <div className="bg-[#0f1625] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-3xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-3">
-                                    <div className="px-3 py-1 rounded-full bg-slate-800 text-slate-200 text-sm">账户信息</div>
-                                    <div className="px-2 py-1 rounded-full text-xs border border-slate-600 text-slate-300">
-                                        {currentUser.role === 'admin' ? '管理员' : '授权用户'}
-                                    </div>
-                                </div>
-                                <button onClick={() => setIsAccountModalOpen(false)} className="text-slate-400 hover:text-white text-lg">&times;</button>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="space-y-3">
-                                    <p className="text-sm text-slate-300">邮箱：{currentUser.name}</p>
-                                    <p className="text-sm text-slate-300">角色：{currentUser.role}</p>
-                                </div>
-                                {currentUser.role === 'admin' && (
-                                    <div className="space-y-3">
-                                        <h3 className="text-sm font-semibold text-slate-200">授权账号</h3>
-                                        <input
-                                            type="email"
-                                            value={newUserEmail}
-                                            onChange={e => setNewUserEmail(e.target.value)}
-                                            placeholder="授权邮箱（Supabase 要求有效邮箱）"
-                                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                        />
-                                        <input
-                                            type="password"
-                                            value={newUserPassword}
-                                            onChange={e => setNewUserPassword(e.target.value)}
-                                            placeholder="设置密码"
-                                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                        />
-                                        <button
-                                            onClick={handleCreateUser}
-                                            className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 text-sm w-fit"
-                                        >
-                                            创建授权账号
-                                        </button>
-                                        <p className="text-xs text-slate-400 leading-5">
-                                            创建后用户将直接写入 Supabase Auth，请确保邮箱/密码有效。<br />
-                                            如果需要查看/删除授权用户，可在 Supabase 控制台的 Authentication → Users 中操作（支持备注）。
-                                        </p>
-
-                                        {/* User List Section */}
-                                        <div className="mt-6 border-t border-slate-700 pt-4">
-                                            <h3 className="text-sm font-semibold text-slate-200 mb-3">已授权用户列表 ({authorizedUsers.length})</h3>
-                                            <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar pr-1">
-                                                {authorizedUsers.length === 0 ? (
-                                                    <p className="text-xs text-slate-500 italic">暂无授权用户</p>
-                                                ) : (
-                                                    authorizedUsers.map((user, idx) => (
-                                                        <div key={user.id || idx} className="flex items-center justify-between bg-slate-800/50 p-2 rounded-lg border border-slate-700/50 group hover:border-slate-600 transition-colors">
-                                                            <div className="flex flex-col">
-                                                                <span className="text-xs text-slate-300 font-mono">{user.name}</span>
-                                                            </div>
-                                                            <button
-                                                                onClick={() => {
-                                                                    if (confirm(`确定要删除用户 ${user.name} 吗？`)) {
-                                                                        handleRemoveAuthorizedUser(user.name);
-                                                                    }
-                                                                }}
-                                                                className="text-slate-500 hover:text-red-400 p-1.5 hover:bg-red-900/20 rounded-md transition-all opacity-0 group-hover:opacity-100"
-                                                                title="删除用户"
-                                                            >
-                                                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                                                            </button>
-                                                        </div>
-                                                    ))
-                                                )}
+                            {/* User List Section */}
+                            <div className="mt-6 border-t border-slate-700 pt-4">
+                                <h3 className="text-sm font-semibold text-slate-200 mb-3">已授权用户列表 ({authorizedUsers.length})</h3>
+                                <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar pr-1">
+                                    {authorizedUsers.length === 0 ? (
+                                        <p className="text-xs text-slate-500 italic">暂无授权用户</p>
+                                    ) : (
+                                        authorizedUsers.map((user, idx) => (
+                                            <div key={user.id || idx} className="flex items-center justify-between bg-slate-800/50 p-2 rounded-lg border border-slate-700/50 group hover:border-slate-600 transition-colors">
+                                                <div className="flex flex-col">
+                                                    <span className="text-xs text-slate-300 font-mono">{user.name}</span>
+                                                </div>
+                                                <button
+                                                    onClick={() => {
+                                                        if (confirm(`确定要删除用户 ${user.name} 吗？`)) {
+                                                            handleRemoveAuthorizedUser(user.name);
+                                                        }
+                                                    }}
+                                                    className="text-slate-500 hover:text-red-400 p-1.5 hover:bg-red-900/20 rounded-md transition-all opacity-0 group-hover:opacity-100"
+                                                    title="删除用户"
+                                                >
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                                </button>
                                             </div>
-                                        </div>
-                                    </div>
-                                )}
+                                        ))
+                                    )}
+                                </div>
                             </div>
                         </div>
-                    </div>,
-                    document.body
-                )
-            }
+                    )}
+                </div>
+            </div>
+        </div>,
+        document.body
+    )
+}
 
         </div >
     );
