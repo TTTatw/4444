@@ -10,11 +10,13 @@ const buildParts = async (inputs: Input[], instruction: string): Promise<Part[]>
         if (input.data) {
             if (input.type === 'image') {
                 let base64Data = input.data;
+                let mimeType = 'image/png';
                 // If input is a URL (from Supabase Storage), fetch and convert to base64
                 if (input.data.startsWith('http')) {
                     try {
                         const response = await fetch(input.data);
                         const blob = await response.blob();
+                        mimeType = blob.type || 'image/png';
                         base64Data = await new Promise((resolve) => {
                             const reader = new FileReader();
                             reader.onloadend = () => {
@@ -28,14 +30,21 @@ const buildParts = async (inputs: Input[], instruction: string): Promise<Part[]>
                         // Skip this image or handle error? For now, we skip.
                         continue;
                     }
-                } else if (input.data.includes(',')) {
-                    // If input is a Data URI (e.g. uploaded image), strip the prefix
-                    base64Data = input.data.split(',')[1];
+                } else if (input.data.startsWith('data:')) {
+                    // If input is a Data URI, extract mimeType and base64
+                    const matches = input.data.match(/^data:(.+);base64,(.+)$/);
+                    if (matches) {
+                        mimeType = matches[1];
+                        base64Data = matches[2];
+                    } else if (input.data.includes(',')) {
+                        // Fallback for simple split
+                        base64Data = input.data.split(',')[1];
+                    }
                 }
 
                 parts.push({
                     inlineData: {
-                        mimeType: 'image/png', // Assuming png for simplicity
+                        mimeType: mimeType,
                         data: base64Data,
                     },
                 });
