@@ -28,6 +28,9 @@ const buildParts = async (inputs: Input[], instruction: string): Promise<Part[]>
                         // Skip this image or handle error? For now, we skip.
                         continue;
                     }
+                } else if (input.data.includes(',')) {
+                    // If input is a Data URI (e.g. uploaded image), strip the prefix
+                    base64Data = input.data.split(',')[1];
                 }
 
                 parts.push({
