@@ -266,7 +266,7 @@ app.post('/api/generate', authGuard, async (req, res) => {
     if (profile.balance < COST_PER_REQUEST) return res.status(402).json({ error: 'Insufficient balance' });
 
     // 2. Call Google API (New SDK)
-    const client = new Client({ apiKey: process.env.GEMINI_API_KEY });
+    const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
     const parts = [];
     if (image) {
