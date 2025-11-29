@@ -110,7 +110,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                     <div className="relative h-full w-full group/image-content rounded-xl overflow-hidden">
                         <div className="h-full w-full flex items-center justify-center bg-black/20">
                             <img
-                                src={`data:image/png;base64,${node.inputImage}`}
+                                src={imgSrc}
                                 alt={node.content}
                                 className="max-h-full max-w-full object-contain"
                                 onDoubleClick={(e) => {
