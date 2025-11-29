@@ -415,7 +415,9 @@ app.post('/api/generate', authGuard, async (req, res) => {
     if (responseImage) {
       // Return URL if upload succeeded, otherwise fallback to base64 (or handle as error)
       // To be safe, if upload failed, we return base64 so user still gets image.
-      res.json({ image: finalImageUrl || responseImage });
+      const imageToSend = finalImageUrl || responseImage;
+      console.log('Sending response with image:', finalImageUrl ? 'URL' : `Base64 (len: ${responseImage.length})`);
+      res.json({ image: imageToSend });
     } else {
       res.json({ text: responseText });
     }
