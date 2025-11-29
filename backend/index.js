@@ -16,8 +16,16 @@ const supabaseAdmin = createClient(
 // Initialize Gemini Client (New SDK)
 const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+const getAllowedOrigins = () => {
+  const origin = process.env.ALLOW_ORIGIN || '*';
+  if (origin.includes(',')) {
+    return origin.split(',').map(o => o.trim());
+  }
+  return origin;
+};
+
 app.use(cors({
-  origin: process.env.ALLOW_ORIGIN || '*',
+  origin: getAllowedOrigins(),
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
