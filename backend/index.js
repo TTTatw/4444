@@ -299,15 +299,35 @@ app.post('/api/generate', authGuard, async (req, res) => {
     console.log('--- DEBUG API CONFIG ---');
     console.log('Model:', model);
 
-    // Create a safe copy of config for logging
-    const logConfig = JSON.parse(JSON.stringify(config));
-    // Truncate base64 image data if present in parts
+    // Helper function to sanitize Base64 string
+    function sanitizeBase64(inputStr) {
+      if (!inputStr) return null;
+      // 1. Remove data URL prefix
+      let result = inputStr.replace(/^data:image\/\w+;base64,/, '');
+      // 2. Remove whitespace and newlines
+      result = result.replace(/[\r\n\s]/g, '');
+      // 3. Ensure standard Base64 characters (+ /) instead of URL safe (- _)
+      result = result.replace(/-/g, '+').replace(/_/g, '/');
+      return result;
+    }
+
+    // Sanitize image data in parts
     if (parts && parts.length > 0) {
       parts.forEach(p => {
-        if (p.inlineData && p.inlineData.data && p.inlineData.data.length > 100) {
-          p.inlineData.data = p.inlineData.data.substring(0, 50) + '...[TRUNCATED]';
+        if (p.inlineData && p.inlineData.data) {
+          p.inlineData.data = sanitizeBase64(p.inlineData.data);
         }
       });
+    }
+
+    // Create a safe copy of config for logging
+    const logConfig = JSON.parse(JSON.stringify(config));
+    // Truncate base64 image data if present in parts (for logging only)
+    if (parts && parts.length > 0) {
+      // Note: We are logging the *sanitized* parts now, but we don't want to mutate 'parts' again for logging
+      // The previous loop already mutated 'parts' in place, which is what we want for the API call.
+      // For logging, we'll just inspect the already mutated parts.
+      // Actually, let's just log a summary to avoid huge logs.
     }
 
     console.log('Config:', JSON.stringify(logConfig, null, 2));
