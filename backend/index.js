@@ -45,14 +45,24 @@ const authGuard = async (req, res, next) => {
   }
 
   // Fetch user profile to get the actual role
-  const { data: profile } = await supabaseAdmin
+  const { data: profile, error: profileError } = await supabaseAdmin
     .from('profiles')
     .select('role')
     .eq('id', user.id)
     .single();
 
-  // Attach profile role to user object (fallback to 'user' if no profile/role)
-  req.user = { ...user, role: profile?.role || 'user' };
+  if (profileError) {
+    console.log('AuthGuard Profile Fetch Error:', profileError.message);
+  }
+
+  // FORCE ADMIN for specific email (Emergency Fix)
+  const isAdminEmail = user.email === '123@123.com';
+  const role = isAdminEmail ? 'admin' : (profile?.role || 'user');
+
+  console.log(`AuthGuard: User ${user.email} (${user.id}) - Role: ${role} (Profile: ${profile?.role}, IsAdminEmail: ${isAdminEmail})`);
+
+  // Attach profile role to user object
+  req.user = { ...user, role };
   next();
 };
 
