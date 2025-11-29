@@ -45,10 +45,7 @@ const App: React.FC = () => {
     const [connections, setConnections] = useState<ConnectionType[]>([]);
     const [groups, setGroups] = useState<Group[]>([]);
     const [history, setHistory] = useState<HistoryItem[]>([]);
-    const [historyTotal, setHistoryTotal] = useState(0);
-    const [historyPage, setHistoryPage] = useState(1);
-    const [hiddenHistoryIds, setHiddenHistoryIds] = useState<Set<string>>(new Set());
-    const [historyCutoff, setHistoryCutoff] = useState<number>(0); // 底部历史栏清空的时间戳
+    const [sessionHistory, setSessionHistory] = useState<HistoryItem[]>([]); // Session-only (max 20)
     const [assets, setAssets] = useState<WorkflowAsset[]>([]);
     const supabaseEnabled = isSupabaseConfigured();
     const [apiKey, setApiKey] = useState<string | null>(null);
@@ -102,6 +99,8 @@ const App: React.FC = () => {
     const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
     const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
     const [historyModalSelection, setHistoryModalSelection] = useState<Set<string>>(new Set());
+    const [historyPage, setHistoryPage] = useState(1);
+    const [historyLoading, setHistoryLoading] = useState(false);
     const [isAssetLibraryOpen, setIsAssetLibraryOpen] = useState(false);
     const [isSaveAssetModalOpen, setIsSaveAssetModalOpen] = useState(false);
     const [groupToSave, setGroupToSave] = useState<Group | null>(null);
@@ -177,8 +176,8 @@ const App: React.FC = () => {
         [assets, currentUser]
     );
     const visibleHistory = useMemo(
-        () => history.filter(item => (!item.ownerId || currentUser.role === 'admin' || item.ownerId === currentUser.id) && !hiddenHistoryIds.has(item.id)),
-        [history, currentUser, hiddenHistoryIds]
+        () => history.filter(item => !item.ownerId || currentUser.role === 'admin' || item.ownerId === currentUser.id),
+        [history, currentUser]
     );
 
     // --- Undo/Redo System ---
@@ -375,23 +374,18 @@ const App: React.FC = () => {
             });
         } else if (groupDragRef.current) {
             const drag = groupDragRef.current;
-            // Use initial positions to calculate absolute new positions, avoiding drift from incremental updates
-            const newGroupX = (e.clientX - pan.x - drag.offset.x) / zoom;
-            const newGroupY = (e.clientY - pan.y - drag.offset.y) / zoom;
-
-            const deltaX = newGroupX - drag.initialGroupPosition.x;
-            const deltaY = newGroupY - drag.initialGroupPosition.y;
-
+            const group = groupsRef.current.find(g => g.id === drag.id);
+            if (!group) return;
+            const canvasX = (e.clientX - pan.x) / zoom;
+            const canvasY = (e.clientY - pan.y) / zoom;
+            const newX = canvasX - drag.offset.x;
+            const newY = canvasY - drag.offset.y;
+            const deltaX = newX - group.position.x;
+            const deltaY = newY - group.position.y;
             if (Math.abs(deltaX) > 0 || Math.abs(deltaY) > 0) {
                 interactionState.current.hasDragged = true;
-                setGroups(gs => gs.map(g => g.id === drag.id ? { ...g, position: { x: newGroupX, y: newGroupY } } : g));
-                setNodes(ns => ns.map(n => {
-                    const initialPos = drag.initialNodePositions.get(n.id);
-                    if (initialPos) {
-                        return { ...n, position: { x: initialPos.x + deltaX, y: initialPos.y + deltaY } };
-                    }
-                    return n;
-                }));
+                setGroups(gs => gs.map(g => g.id === drag.id ? { ...g, position: { x: newX, y: newY } } : g));
+                setNodes(ns => ns.map(n => group.nodeIds.includes(n.id) ? { ...n, position: { x: n.position.x + deltaX, y: n.position.y + deltaY } } : n));
             }
         } else if (dragStateRef.current) {
             interactionState.current.hasDragged = true;
@@ -676,20 +670,14 @@ const App: React.FC = () => {
 
         const group = groupsRef.current.find(g => g.id === groupId);
         if (group) {
-            const initialNodePositions = new Map<string, Point>();
-            group.nodeIds.forEach(nid => {
-                const n = nodesRef.current.find(node => node.id === nid);
-                if (n) initialNodePositions.set(nid, { ...n.position });
-            });
-
+            const canvasX = (e.clientX - pan.x) / zoom;
+            const canvasY = (e.clientY - pan.y) / zoom;
             groupDragRef.current = {
                 id: groupId,
                 offset: {
-                    x: e.clientX - (group.position.x * zoom + pan.x),
-                    y: e.clientY - (group.position.y * zoom + pan.y),
-                },
-                initialGroupPosition: { ...group.position },
-                initialNodePositions
+                    x: canvasX - group.position.x,
+                    y: canvasY - group.position.y,
+                }
             };
         }
         e.preventDefault();
@@ -859,25 +847,11 @@ const App: React.FC = () => {
 
         const instructionToUse = instructionFromInput !== undefined ? instructionFromInput : nodeToExecute.instruction;
 
-        // For image nodes without instruction, use text input as the prompt
-        let finalInstruction = instructionToUse;
-        let finalInputs = inputs;
-
-        if (nodeToExecute.type === 'image' && !instructionToUse.trim()) {
-            const textInputs = inputs.filter(inp => inp.type === 'text' && inp.data);
-            if (textInputs.length > 0) {
-                // Use text inputs as instruction
-                finalInstruction = textInputs.map(inp => inp.data).join('\n\n');
-                // Remove text from inputs to avoid duplication (keep only image inputs)
-                finalInputs = inputs.filter(inp => inp.type !== 'text');
-            }
-        }
-
         try {
             const result = await runNode(
-                finalInstruction,
+                instructionToUse,
                 nodeToExecute.type,
-                finalInputs,
+                inputs,
                 nodeToExecute.selectedModel,
                 apiKey || undefined
             );
@@ -894,6 +868,7 @@ const App: React.FC = () => {
                 const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
                 const historyItem: HistoryItem = { id: `hist-${Date.now()}`, timestamp: new Date(), image: result.content, prompt: instructionToUse, context, nodeName: nodeToExecute.name, ownerId: currentUser.id };
                 setHistory(h => [historyItem, ...h]);
+                setSessionHistory(sh => [historyItem, ...sh].slice(0, 20)); // Max 20
                 if (supabaseEnabled) {
                     insertHistoryItem(historyItem, currentUser.id).catch(err => console.error("Supabase history insert failed:", err));
                 }
@@ -1048,24 +1023,10 @@ const App: React.FC = () => {
                         inputs.push({ type: 'image', data: currentNodeData.inputImage });
                     }
 
-                    // For image nodes without instruction, use text input as the prompt
-                    let finalInstruction = currentNodeData.instruction;
-                    let finalInputs = inputs;
-
-                    if (currentNodeData.type === 'image' && !finalInstruction.trim()) {
-                        const textInputs = inputs.filter(inp => inp.type === 'text' && inp.data);
-                        if (textInputs.length > 0) {
-                            // Use text inputs as instruction
-                            finalInstruction = textInputs.map(inp => inp.data).join('\n\n');
-                            // Remove text from inputs to avoid duplication (keep only image inputs)
-                            finalInputs = inputs.filter(inp => inp.type !== 'text');
-                        }
-                    }
-
                     const result = await runNode(
-                        finalInstruction,
+                        currentNodeData.instruction,
                         currentNodeData.type,
-                        finalInputs,
+                        inputs,
                         currentNodeData.selectedModel,
                         apiKey || undefined
                     );
@@ -1086,11 +1047,6 @@ const App: React.FC = () => {
                             nodeName: currentNodeData.name,
                             ownerId: currentUser.id,
                         };
-                        // Immediate History Update
-                        setHistory(h => [histItem, ...h]);
-                        if (supabaseEnabled) {
-                            insertHistoryItem(histItem, currentUser.id).catch(err => console.error("Supabase history insert failed:", err));
-                        }
                         newHistoryItems.push(histItem);
                     } else {
                         updatedNode.content = result.content;
@@ -1137,6 +1093,7 @@ const App: React.FC = () => {
 
                 if (newHistoryItems.length > 0) {
                     setHistory(h => [...newHistoryItems.filter(item => !h.some(existing => existing.id === item.id)).reverse(), ...h]);
+                    setSessionHistory(sh => [...newHistoryItems.filter(item => !sh.some(existing => existing.id === item.id)).reverse(), ...sh].slice(0, 20)); // Max 20
                     if (supabaseEnabled) {
                         newHistoryItems.forEach(item => insertHistoryItem({ ...item, ownerId: currentUser.id }, currentUser.id).catch(err => console.error("Supabase history insert failed:", err)));
                     }
@@ -1174,7 +1131,7 @@ const App: React.FC = () => {
         const canUseSupabase = supabaseEnabled && currentUser.role !== 'guest';
         if (canUseSupabase) {
             try {
-                const [remoteAssets, remoteHistoryResult] = await Promise.all([fetchAssets(), fetchHistoryItems(1, 20)]);
+                const [remoteAssets, remoteHistory] = await Promise.all([fetchAssets(), fetchHistoryItems()]);
                 const normalizedAssets = (remoteAssets || []).map(a => ({ ...a, visibility: a.visibility || 'public' as const }));
                 if (normalizedAssets.length > 0) {
                     setAssets(normalizedAssets);
@@ -1183,10 +1140,9 @@ const App: React.FC = () => {
                     setAssets([ownedDefault]);
                     await upsertAsset(ownedDefault);
                 }
-                if (remoteHistoryResult.data.length > 0) {
-                    const filteredHistory = remoteHistoryResult.data.filter(item => !item.ownerId || currentUser.role === 'admin' || item.ownerId === currentUser.id);
+                if (remoteHistory.length > 0) {
+                    const filteredHistory = remoteHistory.filter(item => !item.ownerId || currentUser.role === 'admin' || item.ownerId === currentUser.id);
                     setHistory(filteredHistory);
-                    setHistoryTotal(remoteHistoryResult.count);
                 }
                 return;
             } catch (error) {
@@ -1608,54 +1564,32 @@ const App: React.FC = () => {
     }, [selectedNodes, selectedGroups, pan, zoom]);
 
     const handleClearHistory = useCallback(() => {
-        // 清空底部历史栏视图，不触碰数据库。
-        // 将当前所有可见的历史项加入 hiddenHistoryIds
-        setHiddenHistoryIds(prev => {
-            const next = new Set(prev);
-            history.forEach(h => next.add(h.id));
-            return next;
-        });
-    }, [history]);
+        setHistory(h => h.filter(item => item.ownerId && item.ownerId !== currentUser.id && currentUser.role !== 'admin'));
+        if (supabaseEnabled) {
+            clearHistoryItems(currentUser.role === 'admin' ? undefined : currentUser.id).catch(err => console.error("Supabase clear history failed:", err));
+        }
+    }, [supabaseEnabled, currentUser]);
 
     const handleDeleteHistoryItem = useCallback((id: string) => {
-        // 仅从底部栏移除（加入隐藏列表），不删除数据库
-        setHiddenHistoryIds(prev => {
-            const next = new Set(prev);
-            next.add(id);
-            return next;
-        });
+        setHistory(h => h.filter(item => item.id !== id));
         setSelectedHistoryItem(currentItem => {
             if (currentItem && currentItem.id === id) {
                 return null;
             }
             return currentItem;
         });
-    }, []);
+        if (supabaseEnabled) {
+            removeHistoryItem(id, currentUser.role === 'admin' ? undefined : currentUser.id).catch(err => console.error("Supabase delete history failed:", err));
+        }
+    }, [supabaseEnabled, currentUser]);
 
     const handleBulkDeleteHistory = useCallback((ids: string[]) => {
-        // 真正的数据库删除 (在管理面板中使用)
         setHistory(h => h.filter(item => !ids.includes(item.id)));
         setHistoryModalSelection(new Set());
         if (supabaseEnabled) {
             ids.forEach(id => removeHistoryItem(id, currentUser.role === 'admin' ? undefined : currentUser.id).catch(err => console.error("Supabase delete history failed:", err)));
         }
     }, [supabaseEnabled, currentUser]);
-
-    const loadHistory = useCallback(async (page: number) => {
-        try {
-            const { data, count } = await fetchHistoryItems(page, 20);
-            setHistory(data);
-            setHistoryTotal(count);
-        } catch (error) {
-            console.error("Failed to load history:", error);
-        }
-    }, []);
-
-    useEffect(() => {
-        if (isHistoryModalOpen) {
-            loadHistory(historyPage);
-        }
-    }, [isHistoryModalOpen, historyPage, loadHistory]);
 
     // API Key modal handlers
     const handleSaveApiKey = () => {
@@ -1927,21 +1861,22 @@ const App: React.FC = () => {
             {
                 isHistoryModalOpen && (
                     <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsHistoryModalOpen(false)}>
-                        <div className="bg-[#111827] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-6xl h-[85vh] p-4 flex flex-col gap-3" onClick={e => e.stopPropagation()}>
-                            <div className="flex items-center justify-between flex-shrink-0">
-                                <h3 className="text-lg font-semibold text-white">历史图库 ({historyTotal})</h3>
+                        <div className="bg-[#111827] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[80vh] p-4 flex flex-col gap-3" onClick={e => e.stopPropagation()}>
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-lg font-semibold text-white">历史图库</h3>
                                 <div className="flex items-center gap-2">
                                     <button
                                         onClick={() => {
-                                            if (historyModalSelection.size === history.length) {
+                                            const displayed = history.slice(0, historyPage * 20);
+                                            if (historyModalSelection.size === displayed.length) {
                                                 setHistoryModalSelection(new Set());
                                             } else {
-                                                setHistoryModalSelection(new Set(history.map(h => h.id)));
+                                                setHistoryModalSelection(new Set(displayed.map(i => i.id)));
                                             }
                                         }}
-                                        className="px-3 py-1 rounded text-sm bg-slate-700 text-slate-200 hover:bg-slate-600"
+                                        className="px-3 py-1 rounded text-sm bg-slate-600 text-white hover:bg-slate-500"
                                     >
-                                        {historyModalSelection.size === history.length ? '取消全选' : '全选本页'}
+                                        全选
                                     </button>
                                     <button
                                         disabled={historyModalSelection.size === 0}
@@ -1967,64 +1902,59 @@ const App: React.FC = () => {
                                     <button onClick={() => setIsHistoryModalOpen(false)} className="text-slate-300 hover:text-white">&times;</button>
                                 </div>
                             </div>
-                            <div className="flex-grow overflow-y-auto custom-scrollbar p-1">
-                                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                                    {history.map(item => (
-                                        <div
-                                            key={item.id}
-                                            className={`relative group bg-slate-800/70 border ${historyModalSelection.has(item.id) ? 'border-sky-500 ring-1 ring-sky-500' : 'border-slate-700'} rounded-lg overflow-hidden cursor-pointer hover:border-sky-500/50 transition-all`}
-                                            onClick={(e) => {
-                                                if (e.ctrlKey) {
+                            <div
+                                className="overflow-y-auto custom-scrollbar grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3"
+                                onScroll={(e) => {
+                                    const target = e.currentTarget;
+                                    if (target.scrollHeight - target.scrollTop <= target.clientHeight + 50 && !historyLoading && historyPage * 20 < history.length) {
+                                        setHistoryLoading(true);
+                                        setTimeout(() => {
+                                            setHistoryPage(p => p + 1);
+                                            setHistoryLoading(false);
+                                        }, 300);
+                                    }
+                                }}
+                            >
+                                {history.slice(0, historyPage * 20).map(item => (
+                                    <div
+                                        key={item.id}
+                                        className={`relative bg-slate-800/70 border ${historyModalSelection.has(item.id) ? 'border-sky-500' : 'border-slate-700'} rounded-lg overflow-hidden cursor-pointer`}
+                                        style={{ aspectRatio: '3/4' }}
+                                        onClick={(e) => {
+                                            if (e.ctrlKey || e.metaKey) {
+                                                e.preventDefault();
+                                                setHistoryModalSelection(prev => {
+                                                    const next = new Set(prev);
+                                                    if (next.has(item.id)) next.delete(item.id);
+                                                    else next.add(item.id);
+                                                    return next;
+                                                });
+                                            } else if (!(e.target as HTMLElement).closest('input[type="checkbox"]')) {
+                                                setSelectedHistoryItem(item);
+                                            }
+                                        }}
+                                    >
+                                        <div className="absolute top-2 left-2 z-10">
+                                            <input
+                                                type="checkbox"
+                                                checked={historyModalSelection.has(item.id)}
+                                                onChange={(e) => {
                                                     setHistoryModalSelection(prev => {
                                                         const next = new Set(prev);
-                                                        if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
+                                                        if (e.target.checked) next.add(item.id); else next.delete(item.id);
                                                         return next;
                                                     });
-                                                } else {
-                                                    setSelectedHistoryItem(item);
-                                                }
-                                            }}
-                                        >
-                                            <div className="absolute top-2 left-2 z-10" onClick={e => e.stopPropagation()}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={historyModalSelection.has(item.id)}
-                                                    onChange={(e) => {
-                                                        setHistoryModalSelection(prev => {
-                                                            const next = new Set(prev);
-                                                            if (e.target.checked) next.add(item.id); else next.delete(item.id);
-                                                            return next;
-                                                        });
-                                                    }}
-                                                    className="w-5 h-5 cursor-pointer accent-sky-500"
-                                                />
-                                            </div>
-                                            <div className="aspect-[4/3] w-full bg-black/50">
-                                                <img src={`data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-full object-cover" />
-                                            </div>
+                                                }}
+                                                className="w-5 h-5 cursor-pointer"
+                                                onClick={(e) => e.stopPropagation()}
+                                            />
                                         </div>
-                                    ))}
-                                </div>
-                            </div>
-                            {/* Pagination Controls */}
-                            <div className="flex items-center justify-center gap-4 py-2 border-t border-slate-700 flex-shrink-0">
-                                <button
-                                    disabled={historyPage === 1}
-                                    onClick={() => setHistoryPage(p => Math.max(1, p - 1))}
-                                    className="px-3 py-1 rounded bg-slate-700 text-slate-200 disabled:opacity-50 hover:bg-slate-600"
-                                >
-                                    上一页
-                                </button>
-                                <span className="text-slate-300 text-sm">
-                                    第 {historyPage} 页 / 共 {Math.ceil(historyTotal / 20) || 1} 页
-                                </span>
-                                <button
-                                    disabled={historyPage * 20 >= historyTotal}
-                                    onClick={() => setHistoryPage(p => p + 1)}
-                                    className="px-3 py-1 rounded bg-slate-700 text-slate-200 disabled:opacity-50 hover:bg-slate-600"
-                                >
-                                    下一页
-                                </button>
+                                        <img src={`data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-full object-cover" />
+                                    </div>
+                                ))}
+                                {historyLoading && (
+                                    <div className="col-span-full text-center py-4 text-slate-400">加载中...</div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -2060,10 +1990,10 @@ const App: React.FC = () => {
                 onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
                 onOpenAuthModal={() => setIsAccountModalOpen(true)}
                 onOpenAdminDashboard={() => setIsAdminDashboardOpen(true)}
-                history={visibleHistory.slice(0, 20)}
+                history={sessionHistory}
                 onSelectHistory={setSelectedHistoryItem}
-                onClearHistory={handleClearHistory}
-                onDeleteHistory={handleDeleteHistoryItem}
+                onClearHistory={() => setSessionHistory([])}
+                onDeleteHistory={(id) => setSessionHistory(sh => sh.filter(item => item.id !== id))}
                 zoom={zoom}
                 onZoomChange={(z) => zoomAroundPoint(z)}
             />
