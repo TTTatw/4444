@@ -1931,31 +1931,30 @@ const App: React.FC = () => {
                                     </button>
                                     <button
                                         disabled={historyModalSelection.size === 0}
-                                        onClick={() => {
-                                            onClick = { async() => {
-                                            const selectedItems = history.filter(h => historyModalSelection.has(h.id));
-                                    for (const item of selectedItems) {
-                                                const a = document.createElement('a');
-                                    a.download = `${item.nodeName || 'history'}.png`;
-                                    if (item.image.startsWith('http')) {
-                                                    try {
-                                                        const response = await fetch(item.image);
-                                    const blob = await response.blob();
-                                    const url = URL.createObjectURL(blob);
-                                    a.href = url;
-                                    a.click();
-                                    URL.revokeObjectURL(url);
-                                                    } catch (e) {
-                                        console.error("Download failed", e);
-                                    window.open(item.image, '_blank');
-                                                    }
-                                                } else {
-                                        a.href = `data:image/png;base64,${item.image}`;
-                                    a.click();
+                                    onClick={async () => {
+                                        const selectedItems = history.filter(h => historyModalSelection.has(h.id));
+                                        for (const item of selectedItems) {
+                                            const a = document.createElement('a');
+                                            a.download = `${item.nodeName || 'history'}.png`;
+                                            if (item.image.startsWith('http')) {
+                                                try {
+                                                    const response = await fetch(item.image);
+                                                    const blob = await response.blob();
+                                                    const url = URL.createObjectURL(blob);
+                                                    a.href = url;
+                                                    a.click();
+                                                    URL.revokeObjectURL(url);
+                                                } catch (e) {
+                                                    console.error("Download failed", e);
+                                                    window.open(item.image, '_blank');
                                                 }
-                                                await new Promise(r => setTimeout(r, 500));
+                                            } else {
+                                                a.href = `data:image/png;base64,${item.image}`;
+                                                a.click();
                                             }
-                                        }}
+                                            await new Promise(r => setTimeout(r, 500));
+                                        }
+                                    }}
                                     className={`px-3 py-1 rounded text-sm ${historyModalSelection.size === 0 ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-slate-600 text-white hover:bg-slate-500'}`}
                                     >
                                     下载选中
