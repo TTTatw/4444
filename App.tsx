@@ -406,21 +406,6 @@ const App: React.FC = () => {
             if (Math.abs(totalDeltaX) > 0 || Math.abs(totalDeltaY) > 0) {
                 interactionState.current.hasDragged = true;
                 setGroups(gs => gs.map(g => g.id === drag.id ? { ...g, position: { x: newX, y: newY } } : g));
-
-                // Update nodes based on initial position + total delta
-                setNodes(ns => ns.map(n => {
-                    if (group.nodeIds.includes(n.id) && drag.initialNodePositions[n.id]) {
-                        const initialPos = drag.initialNodePositions[n.id];
-                        return {
-                            ...n,
-                            position: {
-                                x: initialPos.x + totalDeltaX,
-                                y: initialPos.y + totalDeltaY
-                            }
-                        };
-                    }
-                    return n;
-                }));
             }
         } else if (dragStateRef.current) {
             interactionState.current.hasDragged = true;
@@ -2025,7 +2010,7 @@ const App: React.FC = () => {
                                             onClick={(e) => e.stopPropagation()}
                                         />
                                     </div>
-                                    <img src={item.image.startsWith('http') ? item.image : `data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-full object-cover" />
+                                    <img src={item.image?.trim().startsWith('http') ? item.image : `data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-full object-cover" />
                                 </div>
                             ))}
                             {historyLoading && (

@@ -139,14 +139,14 @@ export const runNode = async (
                 payload.image_config = {};
 
                 if (options?.aspectRatio) {
-                    payload.image_config.aspect_ratio = options.aspectRatio;
+                    payload.image_config.aspectRatio = options.aspectRatio;
                 }
 
                 if (options?.resolution) {
-                    payload.image_config.image_size = options.resolution;
+                    payload.image_config.imageSize = options.resolution;
                 }
 
-                payload.image_config.sample_count = 1;
+                payload.image_config.sampleCount = 1;
             }
         }
 
