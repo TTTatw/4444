@@ -1,4 +1,24 @@
 import 'dotenv/config';
+
+// Set Proxy for Google GenAI (and other Node fetch requests)
+// This is required for local development in regions where Google is blocked.
+const PROXY_URL = 'http://127.0.0.1:7897';
+process.env.HTTPS_PROXY = PROXY_URL;
+process.env.HTTP_PROXY = PROXY_URL;
+
+// Also try to patch global dispatcher if using Node 18+ native fetch (undici)
+// This is a "best effort" to ensure the proxy is used.
+try {
+  const { setGlobalDispatcher, ProxyAgent } = await import('undici');
+  if (ProxyAgent) {
+    const dispatcher = new ProxyAgent(PROXY_URL);
+    setGlobalDispatcher(dispatcher);
+    console.log(`Global Proxy Agent set to ${PROXY_URL}`);
+  }
+} catch (e) {
+  console.log('Undici ProxyAgent setup skipped (not available or failed):', e.message);
+}
+
 import express from 'express';
 import cors from 'cors';
 import { GoogleGenAI } from '@google/genai';
@@ -167,11 +187,47 @@ app.delete('/api/history/:id', authGuard, async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
 
+    // 1. Fetch the item first to get the image path
+    const { data: item, error: fetchError } = await supabaseAdmin
+      .from('history_items')
+      .select('image')
+      .eq('id', id)
+      .eq('owner_id', userId)
+      .single();
+
+    if (fetchError) throw fetchError;
+
+    // 2. Delete from Storage if it's a hosted image
+    if (item && item.image && item.image.includes(process.env.SUPABASE_URL)) {
+      try {
+        // Extract path from URL. 
+        // URL format: https://.../storage/v1/object/public/images/userId/timestamp.png
+        // We need: userId/timestamp.png
+        const urlParts = item.image.split('/images/');
+        if (urlParts.length > 1) {
+          const filePath = urlParts[1];
+          const { error: storageError } = await supabaseAdmin
+            .storage
+            .from('images')
+            .remove([filePath]);
+
+          if (storageError) {
+            console.error('Failed to delete image file:', storageError);
+          } else {
+            console.log('Deleted image file:', filePath);
+          }
+        }
+      } catch (e) {
+        console.error('Error parsing/deleting image path:', e);
+      }
+    }
+
+    // 3. Delete from Database
     const { error } = await supabaseAdmin
       .from('history_items')
       .delete()
       .eq('id', id)
-      .eq('owner_id', userId); // Ensure user owns the item
+      .eq('owner_id', userId);
 
     if (error) throw error;
     res.json({ success: true });
@@ -287,7 +343,20 @@ app.post('/api/generate', authGuard, async (req, res) => {
     const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
     const parts = [];
-    if (image) {
+
+    // Handle multiple images (New)
+    if (req.body.images && Array.isArray(req.body.images)) {
+      console.log(`[Proxy] Received ${req.body.images.length} images in payload`);
+      req.body.images.forEach(img => {
+        if (typeof img === 'object' && img.inlineData) {
+          parts.push(img);
+        } else if (typeof img === 'string') {
+          parts.push({ inlineData: { mimeType: 'image/png', data: img } });
+        }
+      });
+    }
+    // Fallback/Legacy single image support
+    else if (image) {
       // If image is passed as a Part object (from frontend buildParts)
       if (typeof image === 'object' && image.inlineData) {
         parts.push(image);
@@ -462,6 +531,16 @@ app.post('/api/generate', authGuard, async (req, res) => {
 
   } catch (err) {
     console.error('Generation failed:', err);
+
+    // Log to file for debugging
+    try {
+      const fs = await import('fs');
+      const logMessage = `[${new Date().toISOString()}] Error: ${err.message}\nStack: ${err.stack}\n\n`;
+      fs.appendFileSync('error.log', logMessage);
+    } catch (e) {
+      console.error('Failed to write to error log:', e);
+    }
+
     await supabaseAdmin.from('usage_logs').insert({
       user_id: userId,
       provider: 'google',

@@ -115,7 +115,7 @@ export const runNode = async (
         }
 
         const textPrompt = parts.filter(p => p.text).map(p => p.text).join('\n\n');
-        const imagePart = parts.find(p => p.inlineData);
+        const imageParts = parts.filter(p => p.inlineData);
 
         // Default models
         let selectedModel = model;
@@ -123,13 +123,14 @@ export const runNode = async (
             selectedModel = nodeType === 'image' ? 'gemini-2.5-flash-image' : 'gemini-3-pro-preview';
         }
 
-        const API_BASE = import.meta.env.VITE_API_URL || 'https://4444-production.up.railway.app';
+        // Force localhost in development mode to avoid using production URL from .env files
+        const API_BASE = import.meta.env.DEV ? 'http://localhost:3000' : (import.meta.env.VITE_API_URL || 'https://4444-production.up.railway.app');
 
         // Construct payload
         const payload: any = {
             model: selectedModel,
             prompt: textPrompt,
-            image: imagePart,
+            images: imageParts,
             systemInstruction: "You are a helpful AI assistant.",
             safetySettings: [
                 { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
@@ -143,7 +144,7 @@ export const runNode = async (
         if (nodeType === 'image' || options?.aspectRatio || options?.resolution) {
             // Force image modality for image nodes
             if (nodeType === 'image') {
-                payload.response_modalities = ['IMAGE'];
+                payload.response_modalities = ['Image'];
                 delete payload.systemInstruction;
             }
 

@@ -108,11 +108,65 @@ export const upsertAsset = async (asset: WorkflowAsset) => {
 
 export const deleteAsset = async (assetId: string) => {
     if (!supabase) return;
+
+    console.log('[deleteAsset] Starting deletion for asset:', assetId);
+
+    // 1. Fetch asset to find associated images
+    const { data: asset, error: fetchError } = await supabase
+        .from(ASSET_TABLE)
+        .select('nodes, owner_id')
+        .eq('id', assetId)
+        .single();
+
+    if (fetchError) {
+        console.error('[deleteAsset] Error fetching asset:', fetchError);
+    } else if (asset && asset.nodes) {
+        // 2. Extract image paths
+        const imagePaths: string[] = [];
+        const nodes = asset.nodes as any[];
+
+        console.log('[deleteAsset] Scanning nodes for images...');
+        nodes.forEach(node => {
+            if (node.inputImage && typeof node.inputImage === 'string') {
+                // Check for images in the 'preset' bucket
+                // URL format: .../storage/v1/object/public/preset/userId/filename.png
+                if (node.inputImage.includes('/storage/v1/object/public/preset/')) {
+                    const parts = node.inputImage.split('/preset/');
+                    if (parts.length > 1) {
+                        imagePaths.push(parts[1]);
+                        console.log('[deleteAsset] Found preset image:', parts[1]);
+                    }
+                }
+            }
+        });
+
+        // 3. Delete images from 'preset' bucket
+        if (imagePaths.length > 0) {
+            console.log('[deleteAsset] Deleting images from bucket:', imagePaths);
+            const { error: storageError } = await supabase.storage
+                .from('preset')
+                .remove(imagePaths);
+
+            if (storageError) {
+                console.error('[deleteAsset] Failed to delete preset images:', storageError);
+            } else {
+                console.log('[deleteAsset] Successfully deleted preset images.');
+            }
+        } else {
+            console.log('[deleteAsset] No preset images found to delete.');
+        }
+    }
+
+    // 4. Delete Asset Record
     const { error } = await supabase.from(ASSET_TABLE).delete().eq('id', assetId);
-    if (error) throw error;
+    if (error) {
+        console.error('[deleteAsset] Error deleting asset record:', error);
+        throw error;
+    }
+    console.log('[deleteAsset] Asset record deleted successfully.');
 };
 
-export const fetchHistoryItems = async (page: number = 1, pageSize: number = 20): Promise<{ data: HistoryItem[], count: number }> => {
+export const fetchHistoryItems = async (page: number = 1, pageSize: number = 20): Promise<HistoryItem[]> => {
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
 
@@ -125,31 +179,8 @@ export const fetchHistoryItems = async (page: number = 1, pageSize: number = 20)
         if (!res.ok) throw new Error(await res.text());
         const json = await res.json();
         const data: HistoryRow[] = json.data || json.items || [];
-        const count = json.total || json.count || data.length; // Fallback if API doesn't return count
-        return {
-            data: data.map((row: HistoryRow) => ({
-                id: row.id,
-                timestamp: new Date(row.created_at),
-                image: row.image,
-                prompt: row.prompt,
-                context: row.context,
-                nodeName: row.node_name,
-                ownerId: row.owner_id,
-            })),
-            count
-        };
-    }
-    if (!supabase) return { data: [], count: 0 };
-
-    const { data, error, count } = await supabase
-        .from(HISTORY_TABLE)
-        .select('*', { count: 'exact' })
-        .order('created_at', { ascending: false })
-        .range(from, to);
-
-    if (error) throw error;
-    return {
-        data: (data || []).map((row: HistoryRow) => ({
+        // Return array directly to match App.tsx expectation
+        return data.map((row: HistoryRow) => ({
             id: row.id,
             timestamp: new Date(row.created_at),
             image: row.image,
@@ -157,9 +188,26 @@ export const fetchHistoryItems = async (page: number = 1, pageSize: number = 20)
             context: row.context,
             nodeName: row.node_name,
             ownerId: row.owner_id,
-        })),
-        count: count || 0
-    };
+        }));
+    }
+    if (!supabase) return [];
+
+    const { data, error } = await supabase
+        .from(HISTORY_TABLE)
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+    if (error) throw error;
+    return (data || []).map((row: HistoryRow) => ({
+        id: row.id,
+        timestamp: new Date(row.created_at),
+        image: row.image,
+        prompt: row.prompt,
+        context: row.context,
+        nodeName: row.node_name,
+        ownerId: row.owner_id,
+    }));
 };
 
 export const insertHistoryItem = async (item: HistoryItem, ownerId?: string) => {
@@ -208,6 +256,48 @@ export const removeHistoryItem = async (id: string, ownerId?: string) => {
         return;
     }
     if (!supabase) return;
+
+    // 1. Fetch item to get image path
+    const { data: item, error: fetchError } = await supabase
+        .from(HISTORY_TABLE)
+        .select('image')
+        .eq('id', id)
+        .single();
+
+    if (fetchError) {
+        console.error('Error fetching history item for deletion:', fetchError);
+    } else if (item && item.image && item.image.startsWith('http')) {
+        // 2. Try to delete from storage if it's a Supabase Storage URL
+        try {
+            const url = new URL(item.image);
+            if (url.pathname.includes('/storage/v1/object/public/')) {
+                // Path format: /storage/v1/object/public/BUCKET/PATH
+                const pathParts = url.pathname.split('/storage/v1/object/public/');
+                if (pathParts.length > 1) {
+                    const fullPath = pathParts[1]; // e.g. "preset/user/file.png" or "images/file.png"
+                    const firstSlash = fullPath.indexOf('/');
+                    if (firstSlash > 0) {
+                        const bucket = fullPath.substring(0, firstSlash);
+                        const filePath = fullPath.substring(firstSlash + 1);
+
+                        console.log(`[removeHistoryItem] Deleting from bucket '${bucket}': ${filePath}`);
+                        const { error: storageError } = await supabase.storage
+                            .from(bucket)
+                            .remove([filePath]);
+
+                        if (storageError) {
+                            console.error(`[removeHistoryItem] Failed to delete image from ${bucket}:`, storageError);
+                        } else {
+                            console.log(`[removeHistoryItem] Successfully deleted image from ${bucket}`);
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[removeHistoryItem] Failed to parse image URL for deletion:', e);
+        }
+    }
+
     const query = supabase.from(HISTORY_TABLE).delete().eq('id', id);
     const { error } = ownerId ? await query.eq('owner_id', ownerId) : await query;
     if (error) throw error;
@@ -286,3 +376,41 @@ export const deleteUser = async (id: string) => {
 
 export const getSupabaseClient = () => supabase;
 export const supabaseAuth = () => supabase?.auth;
+
+export const uploadImage = async (base64Data: string, userId: string): Promise<string | null> => {
+    if (!supabase) return null;
+
+    try {
+        // 1. Convert Base64 to Blob
+        const base64Response = await fetch(base64Data);
+        const blob = await base64Response.blob();
+
+        // 2. Generate filename
+        // Path: userId/timestamp-random.png
+        // We are now in the 'preset' bucket, so we can just use userId/filename
+        const filename = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+
+        // 3. Upload to 'preset' bucket
+        const { data, error } = await supabase.storage
+            .from('preset')
+            .upload(filename, blob, {
+                cacheControl: '3600',
+                upsert: false
+            });
+
+        if (error) {
+            console.error('Upload failed:', error);
+            return null;
+        }
+
+        // 4. Get Public URL
+        const { data: { publicUrl } } = supabase.storage
+            .from('preset')
+            .getPublicUrl(filename);
+
+        return publicUrl;
+    } catch (e) {
+        console.error('Error uploading image:', e);
+        return null;
+    }
+};

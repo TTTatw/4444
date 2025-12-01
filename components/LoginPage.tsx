@@ -45,7 +45,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
                     className="absolute bottom-[-20%] right-[-10%] w-[60vw] h-[60vw] bg-blue-900/10 rounded-full blur-[100px] mix-blend-screen animate-pulse delay-1000"
                     style={{ transform: `translate(${mousePosition.x * -2}px, ${mousePosition.y * -2}px)` }}
                 />
-                <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 brightness-100 contrast-150"></div>
+                <div className="absolute inset-0 bg-[url('data:image/svg+xml,%3Csvg viewBox=\'0 0 200 200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noiseFilter\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.65\' numOctaves=\'3\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23noiseFilter)\' opacity=\'0.4\'/%3E%3C/svg%3E')] opacity-20 brightness-100 contrast-150"></div>
             </div>
 
             {/* Main Card */}

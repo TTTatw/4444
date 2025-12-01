@@ -5,9 +5,11 @@ import type { HistoryItem } from '../types';
 interface Props {
     item: HistoryItem;
     onClose: () => void;
+    onDelete?: (id: string) => void;
 }
 
-export const HistoryDetailModal: React.FC<Props> = ({ item, onClose }) => {
+export const HistoryDetailModal: React.FC<Props> = ({ item, onClose, onDelete }) => {
+    // ... (keep existing useEffect and handleDownload) ...
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape') onClose();
@@ -95,7 +97,15 @@ export const HistoryDetailModal: React.FC<Props> = ({ item, onClose }) => {
                         </div>
                     </div>
 
-                    <div className="flex-shrink-0 flex items-center justify-end p-3 border-t border-slate-700">
+                    <div className="flex-shrink-0 flex items-center justify-end p-3 border-t border-slate-700 gap-2">
+                        {onDelete && (
+                            <button
+                                onClick={() => onDelete(item.id)}
+                                className="px-4 py-2 bg-red-600 hover:bg-red-500 rounded-lg text-sm font-semibold text-white"
+                            >
+                                删除
+                            </button>
+                        )}
                         <button
                             onClick={handleDownload}
                             className="px-4 py-2 bg-sky-600 hover:bg-sky-500 rounded-lg text-sm font-semibold text-white"

@@ -1,0 +1,5 @@
+[2025-12-01T04:49:02.730Z] Error: Failed to create profile: new row violates row-level security policy for table "profiles"
+Stack: Error: Failed to create profile: new row violates row-level security policy for table "profiles"
+    at file:///D:/yl/download/4444/backend/index.js:300:30
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+

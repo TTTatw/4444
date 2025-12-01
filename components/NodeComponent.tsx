@@ -31,13 +31,21 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                 let newWidth = img.naturalWidth;
                 let newHeight = img.naturalHeight;
 
-                if (newWidth > MAX_NODE_WIDTH) {
-                    newWidth = MAX_NODE_WIDTH;
-                    newHeight = newWidth / aspectRatio;
-                }
-                if (newHeight > MAX_NODE_HEIGHT) {
-                    newHeight = MAX_NODE_HEIGHT;
-                    newWidth = newHeight * aspectRatio;
+                // User request: Use default node length (320) as the max length for the longest side
+                const MAX_SIDE = DEFAULT_NODE_WIDTH;
+
+                if (newWidth > newHeight) {
+                    // Landscape
+                    if (newWidth > MAX_SIDE) {
+                        newWidth = MAX_SIDE;
+                        newHeight = newWidth / aspectRatio;
+                    }
+                } else {
+                    // Portrait or Square
+                    if (newHeight > MAX_SIDE) {
+                        newHeight = MAX_SIDE;
+                        newWidth = newHeight * aspectRatio;
+                    }
                 }
                 onDataChange(node.id, { width: newWidth, height: newHeight });
             };

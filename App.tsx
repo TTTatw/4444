@@ -18,7 +18,7 @@ import { LoginPage } from './components/LoginPage';
 import { AdminDashboard } from './components/AdminDashboard';
 import type { Node, Connection as ConnectionType, Point, ContextMenu as ContextMenuType, Group, NodeType, HistoryItem, WorkflowAsset, SerializedNode, SerializedConnection, NodeStatus } from './types';
 import { runNode } from './services/geminiService';
-import { isSupabaseConfigured, fetchAssets, upsertAsset, deleteAsset, fetchHistoryItems, insertHistoryItem, removeHistoryItem, clearHistoryItems, fetchUsers, upsertUser, deleteUser, supabaseAuth } from './services/storageService';
+import { isSupabaseConfigured, fetchAssets, upsertAsset, deleteAsset, fetchHistoryItems, insertHistoryItem, removeHistoryItem, clearHistoryItems, fetchUsers, upsertUser, deleteUser, supabaseAuth, uploadImage } from './services/storageService';
 import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH } from './constants';
 
 const TextIcon = () => (
@@ -68,6 +68,7 @@ const App: React.FC = () => {
 
     // Clipboard
     const clipboard = useRef<CanvasState | null>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
 
     // Canvas Interaction State
     const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
@@ -147,8 +148,9 @@ const App: React.FC = () => {
             setHistoryLoading(true);
             try {
                 // Load top 10 history items for the gallery to prevent timeout
-                const { data } = await fetchHistoryItems(1, 10);
-                setHistory(data);
+                // Load top 10 history items for the gallery to prevent timeout
+                const historyData = await fetchHistoryItems(1, 10);
+                setHistory(historyData);
             } catch (e) {
                 console.error("Failed to load history", e);
             } finally {
@@ -194,7 +196,7 @@ const App: React.FC = () => {
         [assets, currentUser]
     );
     const visibleHistory = useMemo(
-        () => history.filter(item => !item.ownerId || currentUser.role === 'admin' || item.ownerId === currentUser.id),
+        () => (history || []).filter(item => !item.ownerId || currentUser.role === 'admin' || item.ownerId === currentUser.id),
         [history, currentUser]
     );
 
@@ -729,7 +731,7 @@ const App: React.FC = () => {
         startGlobalInteraction();
     };
 
-    const handleSaveSelectionAsPreset = (nodeId?: string) => {
+    const handleSaveSelectionAsPreset = async (nodeId?: string) => {
         const selectedIds = new Set(nodes.filter(n => n.selected).map(n => n.id));
         if (nodeId && !selectedIds.has(nodeId)) {
             selectedIds.clear();
@@ -742,21 +744,44 @@ const App: React.FC = () => {
         const minX = Math.min(...selectedNodes.map(n => n.position.x));
         const minY = Math.min(...selectedNodes.map(n => n.position.y));
 
-        const serializableNodes: SerializedNode[] = selectedNodes.map((node) => ({
-            id: node.id,
-            name: node.name,
-            type: node.type,
-            position: { x: node.position.x - minX, y: node.position.y - minY },
-            content: node.content,
-            instruction: node.instruction,
-            inputImage: node.inputImage,
-            width: node.width,
-            height: node.height,
-            selectedModel: node.selectedModel,
-            aspectRatio: node.aspectRatio,
-            resolution: node.resolution,
-            googleSearch: node.googleSearch,
+        setToast('正在保存预设...');
+
+        // Process nodes to upload images if needed
+        const serializableNodes: SerializedNode[] = await Promise.all(selectedNodes.map(async (node) => {
+            let imageUrl = node.inputImage;
+
+            // Always upload image to 'preset-images/' to ensure independence from history
+            // This handles both Base64 (new generation) and URLs (existing history/preset)
+            if (imageUrl) {
+                const uploadedUrl = await uploadImage(imageUrl, currentUser.id);
+                if (uploadedUrl) {
+                    imageUrl = uploadedUrl;
+                } else {
+                    // If upload fails (e.g. RLS error), we keep the original URL but warn the user
+                    // This prevents the "silent failure" where preset points to old image
+                    console.warn('Failed to upload image to preset bucket, keeping original URL');
+                    setToast('图片上传失败(RLS)，仅保存预设数据');
+                    setTimeout(() => setToast(null), 3000);
+                }
+            }
+
+            return {
+                id: node.id,
+                name: node.name,
+                type: node.type,
+                position: { x: node.position.x - minX, y: node.position.y - minY },
+                content: node.content,
+                instruction: node.instruction,
+                inputImage: imageUrl,
+                width: node.width,
+                height: node.height,
+                selectedModel: node.selectedModel,
+                aspectRatio: node.aspectRatio,
+                resolution: node.resolution,
+                googleSearch: node.googleSearch,
+            };
         }));
+
         const serializableConnections: SerializedConnection[] = selectedConnections.map(({ from, to }) => ({ fromNode: from, toNode: to }));
 
         const newAsset: WorkflowAsset = {
@@ -773,7 +798,9 @@ const App: React.FC = () => {
         if (supabaseEnabled) {
             upsertAsset(newAsset).catch(err => console.error("Supabase asset sync failed:", err));
         }
-        setToast('已保存到预设');
+        // Only show success toast if we didn't show an error toast recently (simple logic: just overwrite)
+        // But if upload failed, we already showed a warning. Let's make it clear.
+        setToast('预设已保存');
         setTimeout(() => setToast(null), 2000);
     };
 
@@ -922,7 +949,7 @@ const App: React.FC = () => {
                 });
                 const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
                 const historyItem: HistoryItem = { id: `hist-${Date.now()}`, timestamp: new Date(), image: result.content, prompt: instructionToUse, context, nodeName: nodeToExecute.name, ownerId: currentUser.id };
-                setHistory(h => [historyItem, ...h]);
+                setHistory(h => [historyItem, ...(h || [])]);
                 setSessionHistory(sh => [historyItem, ...sh].slice(0, 20)); // Max 20
                 if (supabaseEnabled) {
                     insertHistoryItem(historyItem, currentUser.id).catch(err => console.error("Supabase history insert failed:", err));
@@ -1238,6 +1265,25 @@ const App: React.FC = () => {
         }
     }, [])
 
+    // Fix for passive event listener error on zoom
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+
+        const handleWheel = (e: WheelEvent) => {
+            if (e.ctrlKey) {
+                e.preventDefault();
+                const rect = canvasRef.current?.getBoundingClientRect();
+                const pointer = { x: e.clientX - (rect?.left || 0), y: e.clientY - (rect?.top || 0) };
+                const scale = e.deltaY * -0.001;
+                zoomAroundPoint(zoom + scale, { x: pointer.x + (rect?.left || 0), y: pointer.y + (rect?.top || 0) });
+            }
+        };
+
+        container.addEventListener('wheel', handleWheel, { passive: false });
+        return () => container.removeEventListener('wheel', handleWheel);
+    }, [zoom, zoomAroundPoint]);
+
     // Load auth state and authorized users (with Supabase fallback)
     const deriveRole = useCallback((email?: string, metadataRole?: string) => {
         const adminList = (((import.meta as any).env?.VITE_ADMIN_EMAILS) || '')
@@ -1336,7 +1382,7 @@ const App: React.FC = () => {
                 position: { x: node.position.x - minX, y: node.position.y - minY },
                 content: shouldPreserveContent ? node.content : '',
                 instruction: node.instruction,
-                inputImage: node.inputImage, // Preserve image data
+                inputImage: null, // Do not save images in workflow assets
                 selectedModel: node.selectedModel,
             };
         });
@@ -1359,17 +1405,34 @@ const App: React.FC = () => {
         setTimeout(() => setToast(null), 3000);
     };
 
-    const handleDeleteAsset = (assetId: string) => {
+    const handleDeleteAsset = async (assetId: string) => {
         const target = assets.find(a => a.id === assetId);
         if (target && target.visibility === 'private' && target.ownerId && currentUser.role !== 'admin' && target.ownerId !== currentUser.id) {
             alert('无权删除其他用户的私密工作流');
             return;
         }
+
+        if (!confirm('确定要删除这个预设吗？')) return;
+
+        setToast('正在删除...');
+
+        // Optimistic update for UI
         const remaining = assets.filter(a => a.id !== assetId);
         saveAssets(remaining);
+
         if (supabaseEnabled) {
-            deleteAsset(assetId).catch(err => console.error("Supabase asset delete failed:", err));
+            try {
+                await deleteAsset(assetId);
+                setToast('预设已删除');
+            } catch (err) {
+                console.error("Supabase asset delete failed:", err);
+                setToast('删除失败，请重试');
+                // Revert state if needed, but for now we assume optimistic update is fine or user will refresh
+            }
+        } else {
+            setToast('预设已删除');
         }
+        setTimeout(() => setToast(null), 2000);
     };
 
     const addWorkflowToCanvas = (workflow: WorkflowAsset | { nodes: SerializedNode[], connections: SerializedConnection[], visibility?: 'public' | 'private', ownerId?: string }) => {
@@ -1487,6 +1550,11 @@ const App: React.FC = () => {
                 if (selectedNodeIds.size > 0 || selectedGroups.length > 0 || selectedConnectionId) {
                     recordHistory();
                 }
+
+                // FIX: If groups are selected, also delete all nodes within those groups
+                selectedGroups.forEach(g => {
+                    g.nodeIds.forEach(nid => selectedNodeIds.add(nid));
+                });
 
                 if (selectedNodeIds.size > 0) {
                     if (activeNodeId && selectedNodeIds.has(activeNodeId)) {
@@ -1626,24 +1694,51 @@ const App: React.FC = () => {
         }
     }, [supabaseEnabled, currentUser]);
 
-    const handleDeleteHistoryItem = useCallback((id: string) => {
+    const handleDeleteHistoryItem = useCallback(async (id: string) => {
+        if (!confirm('确定要删除这条历史记录吗？')) return;
+
+        // Optimistic update
         setHistory(h => h.filter(item => item.id !== id));
+        setSessionHistory(h => h.filter(item => item.id !== id)); // Sync session history
+
         setSelectedHistoryItem(currentItem => {
             if (currentItem && currentItem.id === id) {
                 return null;
             }
             return currentItem;
         });
+
         if (supabaseEnabled) {
-            removeHistoryItem(id, currentUser.role === 'admin' ? undefined : currentUser.id).catch(err => console.error("Supabase delete history failed:", err));
+            setToast('正在删除...');
+            try {
+                await removeHistoryItem(id, currentUser.role === 'admin' ? undefined : currentUser.id);
+                setToast('历史记录已删除');
+            } catch (err) {
+                console.error("Supabase delete history failed:", err);
+                setToast('删除失败，请重试');
+            }
+            setTimeout(() => setToast(null), 2000);
         }
     }, [supabaseEnabled, currentUser]);
 
-    const handleBulkDeleteHistory = useCallback((ids: string[]) => {
+    const handleBulkDeleteHistory = useCallback(async (ids: string[]) => {
+        if (!confirm(`确定要删除选中的 ${ids.length} 条记录吗？`)) return;
+
+        // Optimistic update
         setHistory(h => h.filter(item => !ids.includes(item.id)));
+        setSessionHistory(h => h.filter(item => !ids.includes(item.id))); // Sync session history
         setHistoryModalSelection(new Set());
+
         if (supabaseEnabled) {
-            ids.forEach(id => removeHistoryItem(id, currentUser.role === 'admin' ? undefined : currentUser.id).catch(err => console.error("Supabase delete history failed:", err)));
+            setToast('正在删除...');
+            try {
+                await Promise.all(ids.map(id => removeHistoryItem(id, currentUser.role === 'admin' ? undefined : currentUser.id)));
+                setToast('选中记录已删除');
+            } catch (err) {
+                console.error("Supabase delete history failed:", err);
+                setToast('删除失败，请重试');
+            }
+            setTimeout(() => setToast(null), 2000);
         }
     }, [supabaseEnabled, currentUser]);
 
@@ -1656,20 +1751,16 @@ const App: React.FC = () => {
             } else {
                 localStorage.removeItem('user-api-key');
             }
-        } catch (error) {
-            console.error("Failed to write API key to localStorage:", error);
+            setIsApiKeyModalOpen(false);
+        } catch (e) {
+            console.error('Failed to save API key:', e);
         }
-        setIsApiKeyModalOpen(false);
     };
 
     const handleClearApiKey = () => {
         setApiKey(null);
         setApiKeyDraft('');
-        try {
-            localStorage.removeItem('user-api-key');
-        } catch (error) {
-            console.error("Failed to clear API key from localStorage:", error);
-        }
+        localStorage.removeItem('user-api-key');
     };
 
     // Auth handlers
@@ -1681,7 +1772,6 @@ const App: React.FC = () => {
             console.error("Failed to save authorized users:", error);
         }
     };
-
     const handleLogin = async (register = false, email = loginName, password = loginPassword) => {
         const auth = supabaseAuth();
         if (!auth) {
@@ -1732,8 +1822,9 @@ const App: React.FC = () => {
     };
 
     const handleLogout = async () => {
-        const auth = supabaseAuth();
-        if (auth) await auth.signOut();
+        if (supabaseEnabled) {
+            await supabaseAuth()?.signOut();
+        }
         setCurrentUser({ role: 'guest', name: 'Guest' });
         setLoginName('');
         setLoginPassword('');
@@ -1741,6 +1832,10 @@ const App: React.FC = () => {
         setConnections([]);
         setGroups([]);
         setHistory([]);
+        setSessionHistory([]);
+        setAssets([]);
+        setToast('已登出');
+        setTimeout(() => setToast(null), 2000);
     };
 
     const handleAddAuthorizedUser = async () => {
@@ -1793,16 +1888,8 @@ const App: React.FC = () => {
 
     return (
         <div
+            ref={containerRef}
             className="w-screen h-screen overflow-hidden cursor-default text-slate-200 font-sans select-none"
-            onWheel={(e) => {
-                if (e.ctrlKey) {
-                    e.preventDefault();
-                    const rect = canvasRef.current?.getBoundingClientRect();
-                    const pointer = { x: e.clientX - (rect?.left || 0), y: e.clientY - (rect?.top || 0) };
-                    const scale = e.deltaY * -0.001;
-                    zoomAroundPoint(zoom + scale, { x: pointer.x + (rect?.left || 0), y: pointer.y + (rect?.top || 0) });
-                }
-            }}
         >
             <div
                 ref={canvasRef}
