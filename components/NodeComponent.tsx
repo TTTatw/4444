@@ -101,11 +101,14 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
         height: node.height || DEFAULT_NODE_HEIGHT,
         pointerEvents: 'auto',
         boxShadow: node.selected
-            ? '0 0 0 1px rgba(0, 243, 255, 0.5), 0 0 20px rgba(0, 243, 255, 0.2)'
+            ? '0 0 0 2px #00f3ff, 0 0 20px rgba(0, 243, 255, 0.5)' // Rounded glow matching border radius
             : isError
                 ? '0 0 0 1px rgba(239, 68, 68, 0.5), 0 0 20px rgba(239, 68, 68, 0.2)'
                 : '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+        borderRadius: '1rem', // Ensure border radius is applied to the container for the shadow to follow
     };
+
+    const isRunning = node.status === 'running';
 
     const renderContent = () => {
         if (isImageNode) {
@@ -136,10 +139,10 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                                         fileInputRef.current?.click();
                                     }}
                                     onMouseDown={(e) => e.stopPropagation()}
-                                    className="flex items-center space-x-2 bg-white/10 hover:bg-white/20 text-white text-sm px-4 py-2 rounded-full pointer-events-auto backdrop-blur-md border border-white/10"
+                                    className="flex items-center space-x-1 bg-white/10 hover:bg-white/20 text-white text-xs px-2 py-1 rounded-full pointer-events-auto backdrop-blur-md border border-white/10"
                                 >
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
-                                    <span>Change Image</span>
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+                                    <span>更换</span>
                                 </button>
                             </div>
                         )}
@@ -149,9 +152,9 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
             // Case 2: No image, is a user-input node -> show upload placeholder
             if (!isGenerated) {
                 return (
-                    <div className={`w-full h-full flex flex-col items-center justify-center text-center p-4 border border-dashed border-white/10 rounded-xl bg-white/5 transition-colors ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-default'}`}>
+                    <div className={`w-full h-full flex flex-col items-center justify-center text-center p-2 border border-dashed border-white/10 rounded-xl bg-white/5 transition-colors ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-default'}`}>
                         <div
-                            className="p-3 bg-white/5 rounded-full text-neon-blue mb-3 shadow-[0_0_15px_rgba(0,243,255,0.2)] cursor-pointer hover:bg-white/10 transition-colors"
+                            className="p-2 bg-white/5 rounded-full text-neon-blue mb-2 shadow-[0_0_15px_rgba(0,243,255,0.2)] cursor-pointer hover:bg-white/10 transition-colors"
                             onClick={(e) => {
                                 e.stopPropagation();
                                 !isLocked && fileInputRef.current?.click();
@@ -168,7 +171,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                             }}
                             onMouseDown={(e) => e.stopPropagation()}
                         >
-                            Upload or Paste Image
+                            上传/粘贴
                         </p>
                     </div>
                 );
@@ -176,20 +179,25 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
             // Case 3: No image, is a generated node -> show placeholder or text output
             if (node.content && node.content !== '生成图片') {
                 return (
-                    <div className="text-xs text-slate-300 bg-black/20 p-3 rounded-xl w-full h-full overflow-y-auto custom-scrollbar font-mono">
+                    <div className="text-xs text-slate-300 bg-black/20 p-2 rounded-xl w-full h-full overflow-y-auto custom-scrollbar font-mono">
                         <p className="whitespace-pre-wrap break-words">{node.content}</p>
                     </div>
                 );
             }
+            // Placeholder for generated image node
             return (
-                <div className="w-full h-full flex flex-col items-center justify-center text-center p-4 text-slate-500 border border-dashed border-white/10 rounded-xl bg-black/20">
-                    <div className="animate-pulse">Waiting for generation...</div>
+                <div className="w-full h-full flex flex-col items-center justify-center text-center p-2 text-slate-500 border border-dashed border-white/10 rounded-xl bg-black/20">
+                    <div className={`text-xs ${isRunning ? "animate-pulse text-neon-blue" : ""}`}>
+                        {isRunning ? '生成中...' : '等待生成'}
+                    </div>
                 </div>
             );
         }
 
         // Text Node
-        const placeholderText = isGenerated ? 'Waiting for generation...' : 'Enter text here...\n1. Paste or type content\n2. Write a creative ad\n3. Describe an image to generate';
+        const placeholderText = isGenerated
+            ? (isRunning ? '生成中...' : '等待生成')
+            : '请输入...';
 
         return (
             <div
@@ -204,13 +212,13 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                         placeholder={placeholderText}
-                        className="w-full h-full bg-transparent text-slate-200 p-4 text-sm resize-none focus:outline-none placeholder:text-slate-600 custom-scrollbar font-mono leading-relaxed"
+                        className="w-full h-full bg-transparent text-slate-200 p-2 text-xs resize-none focus:outline-none placeholder:text-slate-600 custom-scrollbar font-mono leading-relaxed"
                         autoFocus
                     />
                 ) : (
-                    <div className="w-full h-full text-slate-200 p-4 text-sm overflow-y-auto custom-scrollbar font-mono leading-relaxed">
-                        <p className="whitespace-pre-wrap break-words">
-                            {node.content || <span className="text-slate-600 italic">{placeholderText}</span>}
+                    <div className={`w-full h-full text-slate-200 p-2 text-xs overflow-y-auto custom-scrollbar font-mono leading-relaxed ${!node.content ? 'flex items-center justify-center text-center' : ''}`}>
+                        <p className="whitespace-pre-wrap break-words w-full">
+                            {node.content || <span className={`text-slate-600 italic ${isRunning ? 'text-neon-blue animate-pulse' : ''}`}>{placeholderText}</span>}
                         </p>
                     </div>
                 )}
@@ -223,7 +231,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
             id={node.id}
             style={nodeStyle}
             tabIndex={-1} // Allow div to receive focus for paste events
-            className={`flex flex-col group/node relative rounded-2xl glass-card outline-none`}
+            className={`group/node absolute outline-none`}
             onMouseDown={(e) => {
                 const target = e.target as HTMLElement;
                 if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') {
@@ -238,80 +246,90 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                 }
             }}
         >
-            <div
-                className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-full flex items-center justify-center"
-                onMouseDown={(e) => onHeaderMouseDown(node.id, e)}
-                onDoubleClick={(e) => { if (isLocked) return; e.stopPropagation(); setIsNameEditing(true); }}
-            >
-                <div className="relative flex justify-center min-w-[100px]">
-                    {isNameEditing ? (
-                        <input
-                            type="text"
-                            defaultValue={node.name}
-                            onBlur={(e) => { onDataChange(node.id, { name: e.target.value }); setIsNameEditing(false); }}
-                            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                            className="bg-black/50 text-center text-xs font-bold text-white p-1.5 rounded-lg w-full focus:outline-none border border-neon-blue/50 shadow-[0_0_10px_rgba(0,243,255,0.2)] backdrop-blur-md"
-                            autoFocus
-                            onClick={e => e.stopPropagation()}
-                        />
-                    ) : (
-                        <h3
-                            className={`font-bold text-xs text-slate-300 select-none truncate text-center px-3 py-1.5 rounded-lg bg-black/40 backdrop-blur-md border border-white/5 group-hover/node:border-white/20 transition-all ${isLocked ? 'cursor-not-allowed opacity-70' : 'cursor-move'} shadow-lg flex items-center gap-1 justify-center`}
-                        >
-                            {isLocked && <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 text-amber-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>}
-                            {node.name}
-                        </h3>
+            {/* Running State Rotation Effect - Behind the card */}
+            {isRunning && (
+                <div className="absolute inset-[-3px] rounded-2xl overflow-hidden z-0 pointer-events-none">
+                    <div className="absolute top-1/2 left-1/2 w-[150%] h-[150%] -translate-x-1/2 -translate-y-1/2 bg-[conic-gradient(from_0deg,transparent_0_340deg,#00f3ff_360deg)] animate-spin" style={{ animationDuration: '4s' }}></div>
+                </div>
+            )}
+
+            {/* Main Card Content */}
+            <div className={`relative w-full h-full flex flex-col rounded-2xl glass-card z-10 ${isRunning ? 'shadow-[0_0_15px_rgba(0,243,255,0.3)]' : ''}`}>
+                <div
+                    className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-full flex items-center justify-center"
+                    onMouseDown={(e) => onHeaderMouseDown(node.id, e)}
+                    onDoubleClick={(e) => { if (isLocked) return; e.stopPropagation(); setIsNameEditing(true); }}
+                >
+                    <div className="relative flex justify-center min-w-[100px]">
+                        {isNameEditing ? (
+                            <input
+                                type="text"
+                                defaultValue={node.name}
+                                onBlur={(e) => { onDataChange(node.id, { name: e.target.value }); setIsNameEditing(false); }}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                className="bg-black/50 text-center text-xs font-bold text-white p-1.5 rounded-lg w-full focus:outline-none border border-neon-blue/50 shadow-[0_0_10px_rgba(0,243,255,0.2)] backdrop-blur-md"
+                                autoFocus
+                                onClick={e => e.stopPropagation()}
+                            />
+                        ) : (
+                            <h3
+                                className={`font-bold text-xs text-slate-300 select-none truncate text-center px-3 py-1.5 rounded-lg bg-black/40 backdrop-blur-md border border-white/5 group-hover/node:border-white/20 transition-all ${isLocked ? 'cursor-not-allowed opacity-70' : 'cursor-move'} shadow-lg flex items-center gap-1 justify-center`}
+                            >
+                                {isLocked && <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 text-amber-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>}
+                                {node.name}
+                            </h3>
+                        )}
+                    </div>
+                </div>
+
+                <div className="w-full h-full overflow-hidden rounded-xl relative p-1">
+                    {renderContent()}
+                    {isError && (
+                        <div className="absolute bottom-0 left-0 right-0 bg-red-900/90 backdrop-blur-md border-t border-red-500/50 text-red-200 text-xs p-3 pointer-events-none max-h-[50%] overflow-hidden rounded-b-xl">
+                            <p className="font-bold mb-1 flex items-center gap-1">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+                                Error
+                            </p>
+                            <div className="max-h-20 overflow-y-auto custom-scrollbar opacity-80">
+                                <p className="whitespace-pre-wrap break-words font-mono">{node.content}</p>
+                            </div>
+                        </div>
                     )}
                 </div>
-            </div>
 
-            <div className="w-full h-full overflow-hidden rounded-xl relative p-1">
-                {renderContent()}
-                {isError && (
-                    <div className="absolute bottom-0 left-0 right-0 bg-red-900/90 backdrop-blur-md border-t border-red-500/50 text-red-200 text-xs p-3 pointer-events-none max-h-[50%] overflow-hidden rounded-b-xl">
-                        <p className="font-bold mb-1 flex items-center gap-1">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
-                            Error
-                        </p>
-                        <div className="max-h-20 overflow-y-auto custom-scrollbar opacity-80">
-                            <p className="whitespace-pre-wrap break-words font-mono">{node.content}</p>
-                        </div>
-                    </div>
+                {/* Input Connector */}
+                <div
+                    className="absolute left-[-6px] top-1/2 -translate-y-1/2 w-3 h-6 bg-slate-700 rounded-r-none rounded-l-sm cursor-pointer flex items-center justify-center transition-all z-10
+                            hover:scale-125 hover:bg-neon-blue hover:shadow-[0_0_10px_rgba(0,243,255,0.5)]
+                            group-hover/node:opacity-100 opacity-0"
+                    style={{ left: -12, width: 12, height: 24, borderRadius: '4px 0 0 4px' }}
+                    title="Input"
+                    data-connector="true"
+                    onMouseDown={(e) => { e.stopPropagation(); onConnectorMouseDown(e, node.id, 'input'); }}
+                    onMouseUp={(e) => { e.stopPropagation(); onConnectorMouseUp(node.id, 'input'); }}
+                >
+                    <div className="w-1 h-3 bg-black/30 rounded-full"></div>
+                </div>
+
+                {/* Output Connector */}
+                <div
+                    className="absolute right-[-6px] top-1/2 -translate-y-1/2 w-3 h-6 bg-slate-700 rounded-l-none rounded-r-sm cursor-pointer flex items-center justify-center transition-all z-10
+                            hover:scale-125 hover:bg-neon-purple hover:shadow-[0_0_10px_rgba(188,19,254,0.5)]
+                            group-hover/node:opacity-100 opacity-0"
+                    style={{ right: -12, width: 12, height: 24, borderRadius: '0 4px 4px 0' }}
+                    title="Output"
+                    data-connector="true"
+                    onMouseDown={(e) => { e.stopPropagation(); onConnectorMouseDown(e, node.id, 'output'); }}
+                    onMouseUp={(e) => { e.stopPropagation(); onConnectorMouseUp(node.id, 'output'); }}
+                >
+                    <div className="w-1 h-3 bg-black/30 rounded-full"></div>
+                </div>
+
+                {/* Hidden file input for image nodes that are user-editable */}
+                {isImageNode && !isGenerated && !isLocked && (
+                    <input type="file" accept="image/*" ref={fileInputRef} onChange={handleImageUpload} className="hidden" />
                 )}
             </div>
-
-            {/* Input Connector */}
-            <div
-                className="absolute left-[-6px] top-1/2 -translate-y-1/2 w-3 h-6 bg-slate-700 rounded-r-none rounded-l-sm cursor-pointer flex items-center justify-center transition-all z-10
-                           hover:scale-125 hover:bg-neon-blue hover:shadow-[0_0_10px_rgba(0,243,255,0.5)]
-                           group-hover/node:opacity-100 opacity-0"
-                style={{ left: -12, width: 12, height: 24, borderRadius: '4px 0 0 4px' }}
-                title="Input"
-                data-connector="true"
-                onMouseDown={(e) => { e.stopPropagation(); onConnectorMouseDown(e, node.id, 'input'); }}
-                onMouseUp={(e) => { e.stopPropagation(); onConnectorMouseUp(node.id, 'input'); }}
-            >
-                <div className="w-1 h-3 bg-black/30 rounded-full"></div>
-            </div>
-
-            {/* Output Connector */}
-            <div
-                className="absolute right-[-6px] top-1/2 -translate-y-1/2 w-3 h-6 bg-slate-700 rounded-l-none rounded-r-sm cursor-pointer flex items-center justify-center transition-all z-10
-                           hover:scale-125 hover:bg-neon-purple hover:shadow-[0_0_10px_rgba(188,19,254,0.5)]
-                           group-hover/node:opacity-100 opacity-0"
-                style={{ right: -12, width: 12, height: 24, borderRadius: '0 4px 4px 0' }}
-                title="Output"
-                data-connector="true"
-                onMouseDown={(e) => { e.stopPropagation(); onConnectorMouseDown(e, node.id, 'output'); }}
-                onMouseUp={(e) => { e.stopPropagation(); onConnectorMouseUp(node.id, 'output'); }}
-            >
-                <div className="w-1 h-3 bg-black/30 rounded-full"></div>
-            </div>
-
-            {/* Hidden file input for image nodes that are user-editable */}
-            {isImageNode && !isGenerated && !isLocked && (
-                <input type="file" accept="image/*" ref={fileInputRef} onChange={handleImageUpload} className="hidden" />
-            )}
         </div>
     );
 });

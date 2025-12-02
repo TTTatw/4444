@@ -1,5 +1,4 @@
-﻿
-import React, { useState, useCallback, useRef, MouseEvent, useMemo, useEffect } from 'react';
+﻿import React, { useState, useCallback, useRef, MouseEvent, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { UIOverlay } from './components/UIOverlay';
 import { NodeComponent } from './components/NodeComponent';
@@ -20,60 +19,65 @@ import type { Node, Connection as ConnectionType, Point, ContextMenu as ContextM
 import { runNode } from './services/geminiService';
 import { isSupabaseConfigured, fetchAssets, upsertAsset, deleteAsset, fetchHistoryItems, insertHistoryItem, removeHistoryItem, clearHistoryItems, fetchUsers, upsertUser, deleteUser, supabaseAuth, uploadImage } from './services/storageService';
 import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH } from './constants';
+import { useNodeDrag } from './hooks/useNodeDrag';
+import { useConnection } from './hooks/useConnection';
+import { useSelection } from './hooks/useSelection';
+import { useCanvasInteraction } from './hooks/useCanvasInteraction';
+import { TextIcon, ImageIcon } from './components/Icons';
 
-const TextIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-300"><path d="M17 6.1H3" /><path d="M21 12.1H3" /><path d="M15.1 18.1H3" /></svg>
-);
 
-const ImageIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-300"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg>
-);
 
-type SnapLine = { type: 'v' | 'h'; x1: number; y1: number; x2: number; y2: number; };
+const MAX_HISTORY = 50;
 
-// Define state interface for history
-interface CanvasState {
-    nodes: Node[];
-    connections: ConnectionType[];
-    groups: Group[];
-}
-
-const App: React.FC = () => {
-    // console.log('App component rendering...');
-    // Core State
+export const App = () => {
     const [nodes, setNodes] = useState<Node[]>([]);
     const [connections, setConnections] = useState<ConnectionType[]>([]);
     const [groups, setGroups] = useState<Group[]>([]);
+    const [contextMenu, setContextMenu] = useState<ContextMenuType | null>(null);
+    const [snapLines, setSnapLines] = useState<{ type: 'v' | 'h'; x1: number; y1: number; x2: number; y2: number }[]>([]);
+
+    // History & Assets
     const [history, setHistory] = useState<HistoryItem[]>([]);
-    const [sessionHistory, setSessionHistory] = useState<HistoryItem[]>([]); // Session-only (max 20)
+    const [sessionHistory, setSessionHistory] = useState<HistoryItem[]>([]);
+    const [historyPage, setHistoryPage] = useState(1);
+    const [historyLoading, setHistoryLoading] = useState(false);
+    const [historyModalSelection, setHistoryModalSelection] = useState<Set<string>>(new Set());
     const [assets, setAssets] = useState<WorkflowAsset[]>([]);
-    const supabaseEnabled = isSupabaseConfigured();
-    const [apiKey, setApiKey] = useState<string | null>(null);
-    const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
-    const [apiKeyDraft, setApiKeyDraft] = useState('');
+    const [groupToSave, setGroupToSave] = useState<Group | null>(null);
+    const [toast, setToast] = useState<string | null>(null);
+
+    // Auth & User
+    const [currentUser, setCurrentUser] = useState<{ role: 'admin' | 'user' | 'guest'; name: string; id?: string }>({ role: 'guest', name: 'Guest' });
     const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-    const [authLoading, setAuthLoading] = useState(true);
-    const [loginName, setLoginName] = useState('');
-    const [loginPassword, setLoginPassword] = useState('');
+    const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+    const [apiKey, setApiKey] = useState<string | null>(localStorage.getItem('user-api-key'));
+    const [apiKeyDraft, setApiKeyDraft] = useState('');
     const [authorizedUsers, setAuthorizedUsers] = useState<{ id?: string; name: string; password: string; }[]>([]);
-    const [currentUser, setCurrentUser] = useState<{ role: 'guest' | 'admin' | 'user'; name: string; id?: string }>({ role: 'guest', name: 'Guest' });
     const [newAuthorizedName, setNewAuthorizedName] = useState('');
     const [newAuthorizedPassword, setNewAuthorizedPassword] = useState('');
+    const [loginName, setLoginName] = useState('');
+    const [loginPassword, setLoginPassword] = useState('');
+    const [newUserEmail, setNewUserEmail] = useState('');
+    const [newUserPassword, setNewUserPassword] = useState('');
+    const [authLoading, setAuthLoading] = useState(true);
+    const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+    const [isAssetLibraryOpen, setIsAssetLibraryOpen] = useState(false);
     const [isAdminDashboardOpen, setIsAdminDashboardOpen] = useState(false);
 
-    // Undo/Redo State
-    const [past, setPast] = useState<CanvasState[]>([]);
-    const [future, setFuture] = useState<CanvasState[]>([]);
-    const MAX_HISTORY = 10;
+    // UI State
+    const [viewerContent, setViewerContent] = useState<{ type: NodeType; content: string; name?: string } | null>(null);
+    const [isSaveAssetModalOpen, setIsSaveAssetModalOpen] = useState(false);
+    const [selectedHistoryItem, setSelectedHistoryItem] = useState<HistoryItem | null>(null);
+    const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
 
-    // Clipboard
-    const clipboard = useRef<CanvasState | null>(null);
-    const containerRef = useRef<HTMLDivElement>(null);
+    // Undo/Redo
+    const [past, setPast] = useState<{ nodes: Node[]; connections: ConnectionType[]; groups: Group[] }[]>([]);
+    const [future, setFuture] = useState<{ nodes: Node[]; connections: ConnectionType[]; groups: Group[] }[]>([]);
 
-    // Canvas Interaction State
-    const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
-    const [zoom, setZoom] = useState(1);
-    const [isDraggingNode, setIsDraggingNode] = useState(false);
+    // Refs
+    const nodesRef = useRef(nodes);
+    const connectionsRef = useRef(connections);
+    const groupsRef = useRef(groups);
     const interactionState = useRef({
         isPanning: false,
         isSelecting: false,
@@ -81,65 +85,17 @@ const App: React.FC = () => {
         startPanPoint: { x: 0, y: 0 },
         dragStart: { x: 0, y: 0 }
     });
-    const selectionStartPointRef = useRef<Point>({ x: 0, y: 0 });
 
-    // UI State
-    const [contextMenu, setContextMenu] = useState<ContextMenuType | null>(null);
-    const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
-    const [drawingConnection, setDrawingConnection] = useState<{ from?: string; to?: string; } | null>(null);
-    const [previewConnection, setPreviewConnection] = useState<{ start: Point; end: Point } | null>(null);
-    const [selectionBox, setSelectionBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
-    const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
-    const [activeConnectionIds, setActiveConnectionIds] = useState<Set<string>>(new Set());
-    const [toast, setToast] = useState<string | null>(null);
-    const [snapLines, setSnapLines] = useState<SnapLine[]>([]);
-
-    // Modals & Trays State
-    const [viewerContent, setViewerContent] = useState<{ type: NodeType, content: string, name: string } | null>(null);
-    const [selectedHistoryItem, setSelectedHistoryItem] = useState<HistoryItem | null>(null);
-    const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
-    const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
-    const [historyModalSelection, setHistoryModalSelection] = useState<Set<string>>(new Set());
-    const [historyPage, setHistoryPage] = useState(1);
-    const [historyLoading, setHistoryLoading] = useState(false);
-    const [isAssetLibraryOpen, setIsAssetLibraryOpen] = useState(false);
-    const [isSaveAssetModalOpen, setIsSaveAssetModalOpen] = useState(false);
-    const [groupToSave, setGroupToSave] = useState<Group | null>(null);
-    const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
-    const [newUserEmail, setNewUserEmail] = useState('');
-    const [newUserPassword, setNewUserPassword] = useState('');
-
-    // Refs
-    const canvasRef = useRef<HTMLDivElement>(null);
-    const nodesRef = useRef(nodes);
-    const connectionsRef = useRef(connections);
-    const groupsRef = useRef(groups);
-    const dragStateRef = useRef<{ id: string; offset: Point } | null>(null);
     const onMouseMoveRef = useRef<((e: globalThis.MouseEvent) => void) | null>(null);
     const onMouseUpRef = useRef<((e: globalThis.MouseEvent) => void) | null>(null);
-    const groupDragRef = useRef<{ id: string; offset: { x: number; y: number } } | null>(null);
 
-    const clampZoom = (z: number) => Math.min(Math.max(0.2, z), 2);
+    const clipboard = useRef<{ nodes: Node[]; connections: ConnectionType[]; groups: Group[] } | null>(null);
 
-    // Prevent browser-level zoom (Ctrl + wheel / Ctrl + +/-) so only canvas zoom applies
-    useEffect(() => {
-        const preventBrowserZoom = (e: WheelEvent) => {
-            if (e.ctrlKey) {
-                e.preventDefault();
-            }
-        };
-        const preventKeyZoom = (e: KeyboardEvent) => {
-            if (e.ctrlKey && ['=', '+', '-', '0'].includes(e.key)) {
-                e.preventDefault();
-            }
-        };
-        window.addEventListener('wheel', preventBrowserZoom, { passive: false });
-        window.addEventListener('keydown', preventKeyZoom, { passive: false });
-        return () => {
-            window.removeEventListener('wheel', preventBrowserZoom);
-            window.removeEventListener('keydown', preventKeyZoom);
-        };
-    }, []);
+    const supabaseEnabled = isSupabaseConfigured();
+
+
+
+
 
     // Load History from DB
     useEffect(() => {
@@ -160,45 +116,14 @@ const App: React.FC = () => {
         loadHistory();
     }, [currentUser.id]);
 
-    const zoomAroundPoint = useCallback((newZoom: number, pointer?: { x: number; y: number }) => {
-        const rect = canvasRef.current?.getBoundingClientRect();
-        const center = pointer || (rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : { x: 0, y: 0 });
-        const canvasPos = { x: center.x - (rect?.left || 0), y: center.y - (rect?.top || 0) };
-        setZoom(prevZoom => {
-            const targetZoom = clampZoom(newZoom);
-            const worldX = (canvasPos.x - pan.x) / prevZoom;
-            const worldY = (canvasPos.y - pan.y) / prevZoom;
-            setPan({
-                x: canvasPos.x - worldX * targetZoom,
-                y: canvasPos.y - worldY * targetZoom,
-            });
-            return targetZoom;
-        });
-    }, [pan.x, pan.y]);
+    const { pan, setPan, zoom, setZoom, zoomAroundPoint, screenToWorld, setContainerRef, setCanvasRef, container, canvas } = useCanvasInteraction();
 
     // Update refs when state changes
     useEffect(() => { nodesRef.current = nodes; }, [nodes]);
     useEffect(() => { connectionsRef.current = connections; }, [connections]);
     useEffect(() => { groupsRef.current = groups; }, [groups]);
 
-    // Derived State (Memoized for performance)
-    const activeNode = useMemo(() => nodes.find(n => n.id === activeNodeId), [nodes, activeNodeId]);
-    const selectedNodes = useMemo(() => nodes.filter(n => n.selected), [nodes]);
-    const selectedGroups = useMemo(() => groups.filter(g => g.selected), [groups]);
-    const generatedNodeIds = useMemo(() => new Set(connections.map(c => c.to)), [connections]);
-    const selectionType = useMemo(() => {
-        if (selectedGroups.length > 0) return 'group';
-        if (selectedNodes.filter(n => !n.groupId).length > 1) return 'node';
-        return 'none';
-    }, [selectedGroups, selectedNodes]);
-    const visibleAssets = useMemo(
-        () => assets.filter(a => a.visibility !== 'private' || currentUser.role === 'admin' || a.ownerId === currentUser.id),
-        [assets, currentUser]
-    );
-    const visibleHistory = useMemo(
-        () => (history || []).filter(item => !item.ownerId || currentUser.role === 'admin' || item.ownerId === currentUser.id),
-        [history, currentUser]
-    );
+
 
     // --- Undo/Redo System ---
     const recordHistory = useCallback(() => {
@@ -253,6 +178,82 @@ const App: React.FC = () => {
         setFuture(newFuture);
     }, [future]);
 
+    // Helper functions for useConnection (hoisted)
+    const createNode = useCallback((type: NodeType, position: Point, namePrefix: string) => {
+        recordHistory(); // Save before creating
+        const count = nodesRef.current.filter(n => n.type === type).length + 1;
+        const newNode: Node = {
+            id: `${type}-${Date.now()}`,
+            name: `${namePrefix} ${count}`,
+            type,
+            position,
+            content: '',
+            instruction: '',
+            status: 'idle',
+            selected: false,
+            inputImage: null,
+            width: DEFAULT_NODE_WIDTH,
+            height: DEFAULT_NODE_HEIGHT,
+            selectedModel: type === 'image' ? 'gemini-2.5-flash-image' : 'gemini-3-pro-preview',
+        };
+        setNodes(ns => [...ns, newNode]);
+        return newNode;
+    }, [recordHistory]);
+
+    const closeMenuOnly = useCallback(() => {
+        setContextMenu(null);
+    }, []);
+
+    // --- Hooks Integration ---
+    const {
+        drawingConnection, previewConnection, startConnection, onConnectorMouseUp, handleDragConnection, cancelConnection,
+        onConnectionDrop
+    } = useConnection({
+        nodes, connections, setConnections, pan, zoom, recordHistory: () => recordHistory(),
+        onCreateNode: createNode,
+        onOpenContextMenu: setContextMenu,
+        onCloseContextMenu: closeMenuOnly
+    });
+
+    const closeContextMenu = useCallback(() => {
+        closeMenuOnly();
+        cancelConnection();
+    }, [closeMenuOnly, cancelConnection]);
+
+    const {
+        isDraggingNode, startNodeDrag, startGroupDrag, handleDrag, endDrag
+    } = useNodeDrag({
+        nodes, setNodes, groups, setGroups, pan, zoom, recordHistory: () => recordHistory(),
+        setSnapLines
+    });
+
+    const {
+        selectionBox, selectedConnectionId, activeConnectionIds, activeNodeId,
+        setSelectionBox, setSelectedConnectionId, setActiveConnectionIds, setActiveNodeId,
+        selectNode, selectGroup, startSelection, updateSelection, endSelection, deselectAll
+    } = useSelection({
+        setNodes, setGroups
+    });
+
+    // Derived State (Memoized for performance)
+    const activeNode = useMemo(() => nodes.find(n => n.id === activeNodeId), [nodes, activeNodeId]);
+    const selectedNodes = useMemo(() => nodes.filter(n => n.selected), [nodes]);
+    const selectedGroups = useMemo(() => groups.filter(g => g.selected), [groups]);
+    const generatedNodeIds = useMemo(() => new Set(connections.map(c => c.to)), [connections]);
+    const selectionType = useMemo(() => {
+        if (selectedGroups.length > 0) return 'groups';
+        if (selectedNodes.filter(n => !n.groupId).length > 1) return 'nodes';
+        return 'none';
+    }, [selectedGroups, selectedNodes]);
+    const visibleAssets = useMemo(
+        () => assets.filter(a => a.visibility !== 'private' || currentUser.role === 'admin' || a.ownerId === currentUser.id),
+        [assets, currentUser]
+    );
+    const visibleHistory = useMemo(
+        () => (history || []).filter(item => !item.ownerId || currentUser.role === 'admin' || item.ownerId === currentUser.id),
+        [history, currentUser]
+    );
+
     // Utility and State Update Functions
     const updateNodeData = useCallback((id: string, data: Partial<Node>) => {
         setNodes(prevNodes => {
@@ -270,7 +271,7 @@ const App: React.FC = () => {
                 // then we should clear the error message from the content of generated nodes.
                 const isGenerated = connectionsRef.current.some(c => c.to === id);
                 if (isGenerated && data.content === undefined) {
-                    updatedNode.content = targetNode.type === 'image' ? 'Waiting for generation...' : '';
+                    updatedNode.content = targetNode.type === 'image' ? '生成中...' : '';
                 }
             }
 
@@ -334,241 +335,54 @@ const App: React.FC = () => {
         });
     }, []);
 
-    const closeContextMenu = useCallback(() => {
-        setContextMenu(null);
-        setDrawingConnection(null);
-        setPreviewConnection(null);
-    }, []);
-
-    const deselectAll = useCallback(() => {
-        setNodes(ns => ns.map(n => ({ ...n, selected: false })));
-        setGroups(gs => gs.map(g => ({ ...g, selected: false })));
-        setSelectedConnectionId(null);
-        setActiveNodeId(null);
-    }, []);
-
-    const createNode = useCallback((type: NodeType, position: Point, namePrefix: string) => {
-        recordHistory(); // Save before creating
-        const count = nodesRef.current.filter(n => n.type === type).length + 1;
-        const newNode: Node = {
-            id: `${type}-${Date.now()}`,
-            name: `${namePrefix} ${count}`,
-            type,
-            position,
-            content: '',
-            instruction: '',
-            status: 'idle',
-            selected: false,
-            inputImage: null,
-            width: DEFAULT_NODE_WIDTH,
-            height: DEFAULT_NODE_HEIGHT,
-            selectedModel: type === 'image' ? 'gemini-2.5-flash-image' : 'gemini-3-pro-preview',
-        };
-        setNodes(ns => [...ns, newNode]);
-        return newNode;
-    }, [recordHistory]);
-
     // --- Global Event Handling for Robust Interactions ---
 
     const handleGlobalMouseMove = (e: globalThis.MouseEvent) => {
+        // Panning
         if (interactionState.current.isPanning) {
             const dx = e.clientX - interactionState.current.dragStart.x;
             const dy = e.clientY - interactionState.current.dragStart.y;
-            if (Math.sqrt(dx * dx + dy * dy) > 5) {
+            if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
                 interactionState.current.hasDragged = true;
             }
-            setPan({ x: e.clientX - interactionState.current.startPanPoint.x, y: e.clientY - interactionState.current.startPanPoint.y });
-        } else if (interactionState.current.isSelecting) {
-            const dx = e.clientX - interactionState.current.dragStart.x;
-            const dy = e.clientY - interactionState.current.dragStart.y;
-            if (Math.sqrt(dx * dx + dy * dy) > 5) {
-                interactionState.current.hasDragged = true;
-            }
-            const start = selectionStartPointRef.current;
-            const end = { x: e.clientX, y: e.clientY };
-            setSelectionBox({
-                x: Math.min(start.x, end.x),
-                y: Math.min(start.y, end.y),
-                width: Math.abs(start.x - end.x),
-                height: Math.abs(start.y - end.y),
-            });
-        } else if (groupDragRef.current) {
-            const drag = groupDragRef.current;
-            const group = groupsRef.current.find(g => g.id === drag.id);
-            if (!group) return;
-            const canvasX = (e.clientX - pan.x) / zoom;
-            const canvasY = (e.clientY - pan.y) / zoom;
-            const newX = canvasX - drag.offset.x;
-            const newY = canvasY - drag.offset.y;
+            setPan(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+            interactionState.current.dragStart = { x: e.clientX, y: e.clientY };
+            return;
+        }
 
-            // Calculate total delta from initial position
-            const totalDeltaX = newX - drag.initialGroupPosition.x;
-            const totalDeltaY = newY - drag.initialGroupPosition.y;
+        // Auto-scroll when selecting near edges
+        if (interactionState.current.isSelecting) {
+            const EDGE_THRESHOLD = 50;
+            const SCROLL_SPEED = 10;
+            let dx = 0;
+            let dy = 0;
 
-            if (Math.abs(totalDeltaX) > 0 || Math.abs(totalDeltaY) > 0) {
-                interactionState.current.hasDragged = true;
-                setGroups(gs => gs.map(g => g.id === drag.id ? { ...g, position: { x: newX, y: newY } } : g));
-                setNodes(ns => ns.map(n => {
-                    if (drag.initialNodePositions[n.id]) {
-                        return {
-                            ...n,
-                            position: {
-                                x: drag.initialNodePositions[n.id].x + totalDeltaX,
-                                y: drag.initialNodePositions[n.id].y + totalDeltaY
-                            }
-                        };
-                    }
-                    return n;
-                }));
-            }
-        } else if (dragStateRef.current) {
-            interactionState.current.hasDragged = true;
-            if (!isDraggingNode) setIsDraggingNode(true);
-            const { id, offset } = dragStateRef.current;
-            let newPos = {
-                x: (e.clientX - pan.x - offset.x) / zoom,
-                y: (e.clientY - pan.y - offset.y) / zoom,
-            };
+            if (e.clientX < EDGE_THRESHOLD) dx = SCROLL_SPEED;
+            if (e.clientX > window.innerWidth - EDGE_THRESHOLD) dx = -SCROLL_SPEED;
+            if (e.clientY < EDGE_THRESHOLD) dy = SCROLL_SPEED;
+            if (e.clientY > window.innerHeight - EDGE_THRESHOLD) dy = -SCROLL_SPEED;
 
-            const SNAP_THRESHOLD = 8 / zoom;
-            const currentLines: SnapLine[] = [];
-            const draggedNode = nodesRef.current.find(n => n.id === id);
-            if (!draggedNode) return;
-
-            const otherNodes = nodesRef.current.filter(n => n.id !== id && !n.selected);
-            const draggedNodeWidth = draggedNode.width || DEFAULT_NODE_WIDTH;
-            const draggedNodeHeight = draggedNode.height || DEFAULT_NODE_HEIGHT;
-
-            const draggedPoints = {
-                v: [newPos.x, newPos.x + draggedNodeWidth / 2, newPos.x + draggedNodeWidth],
-                h: [newPos.y, newPos.y + draggedNodeHeight / 2, newPos.y + draggedNodeHeight],
-            };
-
-            let snappedX = false, snappedY = false;
-
-            for (const otherNode of otherNodes) {
-                const otherNodeWidth = otherNode.width || DEFAULT_NODE_WIDTH;
-                const otherNodeHeight = otherNode.height || DEFAULT_NODE_HEIGHT;
-
-                const otherPoints = {
-                    v: [otherNode.position.x, otherNode.position.x + otherNodeWidth / 2, otherNode.position.x + otherNodeWidth],
-                    h: [otherNode.position.y, otherNode.position.y + otherNodeHeight / 2, otherNode.position.y + otherNodeHeight],
-                };
-
-                if (!snappedX) {
-                    for (const dp of draggedPoints.v) {
-                        for (const op of otherPoints.v) {
-                            if (Math.abs(dp - op) < SNAP_THRESHOLD) {
-                                newPos.x += op - dp;
-                                const lineY1 = Math.min(newPos.y, otherNode.position.y);
-                                const lineY2 = Math.max(newPos.y + draggedNodeHeight, otherNode.position.y + otherNodeHeight);
-                                currentLines.push({ type: 'v', x1: op, y1: lineY1 - 20, x2: op, y2: lineY2 + 20 });
-                                snappedX = true; break;
-                            }
-                        }
-                        if (snappedX) break;
-                    }
-                }
-                if (!snappedY) {
-                    for (const dp of draggedPoints.h) {
-                        for (const op of otherPoints.h) {
-                            if (Math.abs(dp - op) < SNAP_THRESHOLD) {
-                                newPos.y += op - dp;
-                                const lineX1 = Math.min(newPos.x, otherNode.position.x);
-                                const lineX2 = Math.max(newPos.x + draggedNodeWidth, otherNode.position.x + otherNodeWidth);
-                                currentLines.push({ type: 'h', x1: lineX1 - 20, y1: op, x2: lineX2 + 20, y2: op });
-                                snappedY = true; break;
-                            }
-                        }
-                        if (snappedY) break;
-                    }
-                }
-            }
-            setSnapLines(currentLines);
-            setNodes(ns => ns.map(n => n.id === id ? { ...n, position: newPos } : n));
-        } else if (drawingConnection) {
-            const startNodeId = drawingConnection.from || drawingConnection.to;
-            if (!startNodeId) return;
-            const startNode = nodesRef.current.find(n => n.id === startNodeId);
-            if (!startNode) return;
-            const startW = startNode.width || DEFAULT_NODE_WIDTH;
-            const startH = startNode.height || DEFAULT_NODE_HEIGHT;
-
-            const startPoint = drawingConnection.from
-                ? { x: startNode.position.x + startW + 12, y: startNode.position.y + startH / 2 }
-                : { x: startNode.position.x - 12, y: startNode.position.y + startH / 2 };
-
-            const endPoint = { x: (e.clientX - pan.x) / zoom, y: (e.clientY - pan.y) / zoom };
-            if (drawingConnection.from) {
-                setPreviewConnection({ start: startPoint, end: endPoint });
-            } else {
-                setPreviewConnection({ start: endPoint, end: startPoint });
+            if (dx !== 0 || dy !== 0) {
+                setPan(prev => ({ x: prev.x + dx, y: prev.y + dy }));
             }
         }
+
+        handleDrag(e);
+        handleDragConnection(e);
+        updateSelection({ x: e.clientX, y: e.clientY });
     };
 
     const handleGlobalMouseUp = (e: globalThis.MouseEvent) => {
-        if (interactionState.current.hasDragged && dragStateRef.current) {
-            // Only record history if we actually dragged a node
-            recordHistory();
-        }
-
-        if (selectionBox && selectionBox.width > 0 && selectionBox.height > 0) {
-            const selectedNodeIds = new Set(e.ctrlKey ? selectedNodes.map(n => n.id) : []);
-            const selectedGroupIds = new Set(e.ctrlKey ? selectedGroups.map(g => g.id) : []);
-
-            const checkIntersection = (elemRect: DOMRect) =>
-                elemRect.x < selectionBox.x + selectionBox.width &&
-                elemRect.x + elemRect.width > selectionBox.x &&
-                elemRect.y < selectionBox.y + selectionBox.height &&
-                elemRect.y + elemRect.height > selectionBox.y;
-
-            nodes.forEach(n => {
-                const elem = document.getElementById(n.id);
-                if (elem && checkIntersection(elem.getBoundingClientRect())) selectedNodeIds.add(n.id);
-            });
-            groups.forEach(g => {
-                const elem = document.getElementById(`group-${g.id}`);
-                if (elem && checkIntersection(elem.getBoundingClientRect())) selectedGroupIds.add(g.id);
-            });
-            setNodes(ns => ns.map(n => ({ ...n, selected: selectedNodeIds.has(n.id) })));
-            setGroups(gs => gs.map(g => ({ ...g, selected: selectedGroupIds.has(g.id) })));
-        }
-
-        if (drawingConnection) {
-            const isReleasedOnConnector = (e.target as HTMLElement).closest('[data-connector="true"]');
-            if (!isReleasedOnConnector) {
-                const canvasPosition = { x: (e.clientX - pan.x) / zoom, y: (e.clientY - pan.y) / zoom };
-                const createAndConnect = (type: NodeType) => {
-                    const newNode = createNode(type, canvasPosition, type === 'text' ? 'Text' : 'Image');
-                    if (drawingConnection?.from) {
-                        setConnections(cs => [...cs, { id: `${drawingConnection.from}-${newNode.id}`, from: drawingConnection.from!, to: newNode.id }]);
-                    } else if (drawingConnection?.to) {
-                        setConnections(cs => [...cs, { id: `${newNode.id}-${drawingConnection.to}`, from: newNode.id, to: drawingConnection.to! }]);
-                    }
-                    closeContextMenu();
-                };
-                setContextMenu({
-                    position: { x: e.clientX, y: e.clientY }, title: 'Create and connect node',
-                    options: [
-                        { label: 'Text', description: 'Create text node', action: () => createAndConnect('text'), icon: <TextIcon /> },
-                        { label: 'Image', description: 'Create image node', action: () => createAndConnect('image'), icon: <ImageIcon /> },
-                    ]
-                });
-            }
-        }
-
-        // Reset all interaction states
-        if (isDraggingNode) setIsDraggingNode(false);
         interactionState.current.isPanning = false;
         interactionState.current.isSelecting = false;
-        dragStateRef.current = null;
-        groupDragRef.current = null;
-        setDrawingConnection(null);
-        setPreviewConnection(null);
-        setSelectionBox(null);
-        setSnapLines([]);
-        setTimeout(() => { interactionState.current.hasDragged = false; }, 0);
+        endDrag();
+        endSelection(nodes, groups, e.ctrlKey || e.metaKey);
+
+        // Handle Connection Drop (Drag to Create)
+        onConnectionDrop(e);
+
+        onConnectorMouseUp(null, 'input'); // Pass null/dummy to handle global release (cancel)
+        cancelConnection();
     };
 
     useEffect(() => {
@@ -590,12 +404,17 @@ const App: React.FC = () => {
     // Event Handlers
     const handleCanvasMouseDown = (e: MouseEvent<HTMLDivElement>) => {
         e.preventDefault();
+        // Blur any active element (inputs, textareas) when clicking the canvas
+        if (document.activeElement instanceof HTMLElement) {
+            document.activeElement.blur();
+        }
         if (contextMenu) closeContextMenu();
 
         const isCanvasClick = (e.target as HTMLElement).closest('[data-id="canvas-bg"]');
 
-        if (e.button === 2) { // Right click panning, allow anywhere
+        if (e.button === 2) { // Right click panning
             interactionState.current.isPanning = true;
+            interactionState.current.hasDragged = false; // Reset drag state
             interactionState.current.startPanPoint = { x: e.clientX - pan.x, y: e.clientY - pan.y };
             interactionState.current.dragStart = { x: e.clientX, y: e.clientY };
             startGlobalInteraction();
@@ -607,9 +426,7 @@ const App: React.FC = () => {
         if (e.button === 0) { // Left click
             if (!e.ctrlKey) deselectAll();
             interactionState.current.isSelecting = true;
-            interactionState.current.dragStart = { x: e.clientX, y: e.clientY };
-            selectionStartPointRef.current = { x: e.clientX, y: e.clientY };
-            setSelectionBox({ x: e.clientX, y: e.clientY, width: 0, height: 0 });
+            startSelection({ x: e.clientX, y: e.clientY });
         }
         startGlobalInteraction();
     };
@@ -625,57 +442,33 @@ const App: React.FC = () => {
         const canvasPosition = { x: (position.x - pan.x) / zoom, y: (position.y - pan.y) / zoom };
 
         const createAndClose = (type: NodeType) => {
-            createNode(type, canvasPosition, type === 'text' ? 'Text' : 'Image');
+            createNode(type, canvasPosition, type === 'text' ? '文本节点' : '图片节点');
             closeContextMenu();
         };
 
         setContextMenu({
             position,
-            title: 'Create Node',
+            title: '创建节点',
             options: [
-                { label: 'Text', description: 'Text input or output', action: () => createAndClose('text'), icon: <TextIcon /> },
-                { label: 'Image', description: 'Image input or output', action: () => createAndClose('image'), icon: <ImageIcon /> },
+                { label: '文本节点', description: '处理文本输入', action: () => createAndClose('text'), icon: <TextIcon /> },
+                { label: '图片节点', description: '生成或显示图片', action: () => createAndClose('image'), icon: <ImageIcon /> },
             ]
         });
     };
     const handleNodeMouseDown = (nodeId: string, e: MouseEvent) => {
-        // Blur any active element to ensure the delete handler isn't blocked by a focused textarea.
-        // Modified to only blur if the active element is an input or textarea,
-        // allowing our node divs to keep focus (for paste events).
         if (document.activeElement && (document.activeElement as HTMLElement).blur) {
             const tagName = document.activeElement.tagName;
             if (tagName === 'INPUT' || tagName === 'TEXTAREA') {
                 (document.activeElement as HTMLElement).blur();
             }
         }
-
         setActiveNodeId(nodeId);
         e.stopPropagation();
-
-        if (e.ctrlKey) {
-            // Toggle selection for the clicked node
-            setNodes(ns => ns.map(n => n.id === nodeId ? { ...n, selected: !n.selected } : n));
-        } else if (!nodes.find(n => n.id === nodeId)?.selected) {
-            // A non-ctrl click should make this node the sole selection, if it isn't already part of a selection.
-            setNodes(ns => ns.map(n => ({ ...n, selected: n.id === nodeId })));
-            setGroups(gs => gs.map(g => ({ ...g, selected: false })));
-            setSelectedConnectionId(null);
-        }
+        selectNode(nodeId, e.ctrlKey);
     };
 
     const handleNodeHeaderMouseDown = (nodeId: string, e: MouseEvent<HTMLElement>) => {
-        recordHistory(); // Save state before starting drag
-        const node = nodes.find(n => n.id === nodeId);
-        if (!node) return;
-        dragStateRef.current = {
-            id: nodeId,
-            offset: {
-                x: e.clientX - (node.position.x * zoom + pan.x),
-                y: e.clientY - (node.position.y * zoom + pan.y),
-            }
-        };
-        e.preventDefault();
-        e.stopPropagation();
+        startNodeDrag(nodeId, e);
         startGlobalInteraction();
     };
 
@@ -694,40 +487,8 @@ const App: React.FC = () => {
 
     const handleGroupMouseDown = (groupId: string, e: MouseEvent) => {
         if (e.button === 2) return;
-        if (e.ctrlKey) {
-            setGroups(gs => gs.map(g => g.id === groupId ? { ...g, selected: !g.selected } : g));
-        } else {
-            setGroups(gs => gs.map(g => ({ ...g, selected: g.id === groupId })));
-            setNodes(ns => ns.map(n => ({ ...n, selected: false })));
-            setSelectedConnectionId(null);
-        }
-
-        const group = groupsRef.current.find(g => g.id === groupId);
-        if (group) {
-            const canvasX = (e.clientX - pan.x) / zoom;
-            const canvasY = (e.clientY - pan.y) / zoom;
-
-            // Store initial positions of all nodes in the group to prevent drift
-            const initialNodePositions = {};
-            group.nodeIds.forEach(nodeId => {
-                const node = nodesRef.current.find(n => n.id === nodeId);
-                if (node) {
-                    initialNodePositions[nodeId] = { ...node.position };
-                }
-            });
-
-            groupDragRef.current = {
-                id: groupId,
-                offset: {
-                    x: canvasX - group.position.x,
-                    y: canvasY - group.position.y,
-                },
-                initialGroupPosition: { ...group.position },
-                initialNodePositions
-            };
-        }
-        e.preventDefault();
-        e.stopPropagation();
+        selectGroup(groupId, e.ctrlKey);
+        startGroupDrag(groupId, e);
         startGlobalInteraction();
     };
 
@@ -805,45 +566,12 @@ const App: React.FC = () => {
     };
 
     const handleConnectorMouseDown = (e: React.MouseEvent, nodeId: string, type: 'input' | 'output') => {
-        e.stopPropagation();
-        const node = nodes.find(n => n.id === nodeId);
-        if (!node) return;
-
-        const nodeWidth = node.width || DEFAULT_NODE_WIDTH;
-        const nodeHeight = node.height || DEFAULT_NODE_HEIGHT;
-
-        let startX, startY;
-
-        if (type === 'output') {
-            setDrawingConnection({ from: nodeId });
-            // Offset for output connector (right side + 12px)
-            startX = node.position.x + nodeWidth + 12;
-            startY = node.position.y + nodeHeight / 2;
-        } else { // type === 'input'
-            setDrawingConnection({ to: nodeId });
-            // Offset for input connector (left side - 12px)
-            startX = node.position.x - 12;
-            startY = node.position.y + nodeHeight / 2;
-        }
-        setPreviewConnection({ start: { x: startX, y: startY }, end: { x: startX, y: startY } });
+        startConnection(nodeId, type, e);
         startGlobalInteraction();
     };
 
     const handleConnectorMouseUp = (nodeId: string, type: 'input' | 'output') => {
-        if (!drawingConnection) return;
-
-        const fromNode = drawingConnection.from || (type === 'output' ? nodeId : undefined);
-        const toNode = drawingConnection.to || (type === 'input' ? nodeId : undefined);
-
-        if (fromNode && toNode && fromNode !== toNode) {
-            const alreadyExists = connections.some(c => c.from === fromNode && c.to === toNode);
-            if (!alreadyExists) {
-                recordHistory();
-                setConnections(cs => [...cs, { id: `${fromNode}-${toNode}`, from: fromNode, to: toNode }]);
-            }
-        }
-        setDrawingConnection(null);
-        setPreviewConnection(null);
+        onConnectorMouseUp(nodeId, type);
     };
 
     const groupSelectedNodes = () => {
@@ -1266,23 +994,7 @@ const App: React.FC = () => {
     }, [])
 
     // Fix for passive event listener error on zoom
-    useEffect(() => {
-        const container = containerRef.current;
-        if (!container) return;
 
-        const handleWheel = (e: WheelEvent) => {
-            if (e.ctrlKey) {
-                e.preventDefault();
-                const rect = canvasRef.current?.getBoundingClientRect();
-                const pointer = { x: e.clientX - (rect?.left || 0), y: e.clientY - (rect?.top || 0) };
-                const scale = e.deltaY * -0.001;
-                zoomAroundPoint(zoom + scale, { x: pointer.x + (rect?.left || 0), y: pointer.y + (rect?.top || 0) });
-            }
-        };
-
-        container.addEventListener('wheel', handleWheel, { passive: false });
-        return () => container.removeEventListener('wheel', handleWheel);
-    }, [zoom, zoomAroundPoint]);
 
     // Load auth state and authorized users (with Supabase fallback)
     const deriveRole = useCallback((email?: string, metadataRole?: string) => {
@@ -1465,7 +1177,7 @@ const App: React.FC = () => {
         ];
 
         // 3. Find a non-overlapping position
-        const canvasRect = canvasRef.current?.getBoundingClientRect();
+        const canvasRect = canvas?.getBoundingClientRect();
         let targetPos = {
             x: canvasRect ? ((canvasRect.width / 2) - pan.x) / zoom : 0,
             y: canvasRect ? ((canvasRect.height / 2) - pan.y) / zoom : 0,
@@ -1491,12 +1203,16 @@ const App: React.FC = () => {
             const newId = `${nodeData.type}-${Date.now()}-${Math.random()}`;
             idMap.set(oldId, newId);
             return {
-                ...nodeData, id: newId, status: 'idle', selected: false,
-                width: nodeData.width || (nodeData.type === 'image' ? DEFAULT_NODE_WIDTH : undefined),
-                height: nodeData.height || (nodeData.type === 'image' ? DEFAULT_NODE_HEIGHT : undefined),
+                ...nodeData,
+                id: newId,
+                status: 'idle',
+                selected: false,
+                // Ensure width and height are always numbers to prevent NaN/white screen issues
+                width: Number(nodeData.width) || DEFAULT_NODE_WIDTH,
+                height: Number(nodeData.height) || DEFAULT_NODE_HEIGHT,
                 position: {
-                    x: nodeData.position.x - minX + targetPos.x,
-                    y: nodeData.position.y - minY + targetPos.y,
+                    x: (Number(nodeData.position?.x) || 0) - minX + targetPos.x,
+                    y: (Number(nodeData.position?.y) || 0) - minY + targetPos.y,
                 },
                 selectedModel: nodeData.selectedModel,
                 locked: shouldLock,
@@ -1522,15 +1238,35 @@ const App: React.FC = () => {
                 bottom: Math.max(...loadedNodes.map(n => n.position.y + (n.height || DEFAULT_NODE_HEIGHT))),
             };
             const GROUP_PADDING = 60;
-            const size = { width: bounds.right - bounds.left + GROUP_PADDING * 2, height: bounds.bottom - bounds.top + GROUP_PADDING * 2 };
+            const HEADER_SPACE = 40;
+            const size = { width: bounds.right - bounds.left + GROUP_PADDING * 2, height: bounds.bottom - bounds.top + GROUP_PADDING * 2 + HEADER_SPACE };
             setGroups(g => [...g, {
                 id: groupId,
                 name: namesafe,
                 nodeIds: loadedNodes.map(n => n.id),
-                position: { x: bounds.left - GROUP_PADDING, y: bounds.top - GROUP_PADDING },
+                position: { x: bounds.left - GROUP_PADDING, y: bounds.top - GROUP_PADDING - HEADER_SPACE },
                 size,
                 selected: true,
             }]);
+        }
+
+        // Auto-center the view on the imported workflow
+        if (loadedNodes.length > 0 && canvas) {
+            const allX = loadedNodes.map(n => n.position.x);
+            const allY = loadedNodes.map(n => n.position.y);
+            const minX = Math.min(...allX);
+            const maxX = Math.max(...loadedNodes.map(n => n.position.x + (n.width || DEFAULT_NODE_WIDTH)));
+            const minY = Math.min(...allY);
+            const maxY = Math.max(...loadedNodes.map(n => n.position.y + (n.height || DEFAULT_NODE_HEIGHT)));
+
+            const centerX = (minX + maxX) / 2;
+            const centerY = (minY + maxY) / 2;
+
+            const rect = canvas.getBoundingClientRect();
+            setPan({
+                x: rect.width / 2 - centerX * zoom,
+                y: rect.height / 2 - centerY * zoom
+            });
         }
     };
 
@@ -1538,20 +1274,16 @@ const App: React.FC = () => {
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             const targetElement = e.target as HTMLElement;
-
-            // Check if typing in an input
             const isTyping = ['INPUT', 'TEXTAREA'].includes(targetElement.tagName);
 
             // --- DELETE ---
             if (!isTyping && (e.key === 'Backspace' || e.key === 'Delete')) {
                 const selectedNodeIds = new Set(nodesRef.current.filter(n => n.selected).map(n => n.id));
 
-                // Should we record history? Yes if we are about to delete something.
                 if (selectedNodeIds.size > 0 || selectedGroups.length > 0 || selectedConnectionId) {
                     recordHistory();
                 }
 
-                // FIX: If groups are selected, also delete all nodes within those groups
                 selectedGroups.forEach(g => {
                     g.nodeIds.forEach(nid => selectedNodeIds.add(nid));
                 });
@@ -1564,7 +1296,6 @@ const App: React.FC = () => {
                     setConnections(cs => cs.filter(c => !selectedNodeIds.has(c.from) && !selectedNodeIds.has(c.to)));
                 }
                 if (selectedGroups.length > 0) {
-                    // ungroupSelectedNodes internally records history if groups exist
                     ungroupSelectedNodes();
                 }
                 if (selectedConnectionId) {
@@ -1578,19 +1309,9 @@ const App: React.FC = () => {
                 const selected = nodesRef.current.filter(n => n.selected);
                 if (selected.length === 0) return;
 
-                // Also copy groups if they are selected or if all their nodes are selected
-                const selectedGroupIds = new Set(groupsRef.current.filter(g => g.selected).map(g => g.id));
-                // If all nodes of a group are selected, implicitly copy the group too? 
-                // For now, let's stick to explicit selection or just nodes. 
-                // The `selectedNodes` logic handles the content.
-
                 const nodesToCopy = selected;
                 const nodeIds = new Set(nodesToCopy.map(n => n.id));
-
-                // Copy connections between selected nodes
                 const connectionsToCopy = connectionsRef.current.filter(c => nodeIds.has(c.from) && nodeIds.has(c.to));
-
-                // Copy groups if selected
                 const groupsToCopy = groupsRef.current.filter(g => g.selected);
 
                 clipboard.current = {
@@ -1609,8 +1330,6 @@ const App: React.FC = () => {
                 deselectAll();
 
                 const { nodes: cpNodes, connections: cpConnections, groups: cpGroups } = clipboard.current;
-
-                // Offset for paste
                 const OFFSET = 50;
                 const idMap = new Map<string, string>();
 
@@ -1622,7 +1341,7 @@ const App: React.FC = () => {
                         id: newId,
                         position: { x: n.position.x + OFFSET, y: n.position.y + OFFSET },
                         selected: true,
-                        groupId: undefined // Reset group initially, re-link below if group is also copied
+                        groupId: undefined
                     };
                 });
 
@@ -1640,13 +1359,12 @@ const App: React.FC = () => {
                     selected: true
                 }));
 
-                // Link nodes back to new groups if applicable
                 newGroups.forEach(ng => {
                     const groupNodeSet = new Set(ng.nodeIds);
                     newNodes.forEach(n => {
                         if (groupNodeSet.has(n.id)) {
                             n.groupId = ng.id;
-                            n.selected = false; // Deselect nodes if group is selected
+                            n.selected = false;
                         }
                     });
                 });
@@ -1673,19 +1391,36 @@ const App: React.FC = () => {
     }, [selectedGroups, selectedConnectionId, ungroupSelectedNodes, activeNodeId, undo, redo, recordHistory, deselectAll]);
 
     const toolbarPosition = useMemo(() => {
-        if (!canvasRef.current || (selectedNodes.length === 0 && selectedGroups.length === 0)) return null;
+        if (!canvas || (selectedNodes.length === 0 && selectedGroups.length === 0)) return null;
         const selectedElements = [
             ...selectedNodes.map(n => document.getElementById(n.id)),
             ...selectedGroups.map(g => document.getElementById(`group-${g.id}`))
         ].filter(Boolean) as HTMLElement[];
         if (selectedElements.length === 0) return null;
+
         let top = Infinity, left = Infinity, right = -Infinity;
         selectedElements.forEach(el => {
             const rect = el.getBoundingClientRect();
-            top = Math.min(top, rect.top); left = Math.min(left, rect.left); right = Math.max(right, rect.right);
+            top = Math.min(top, rect.top);
+            left = Math.min(left, rect.left);
+            right = Math.max(right, rect.right);
         });
-        return { top: top - 50, left: left + (right - left) / 2 };
-    }, [selectedNodes, selectedGroups, pan, zoom]);
+        // Calculate offset to ensure button is centered on the Group border (dashed line).
+        // Toolbar height is approx 44px. Half is 22px.
+        // We want Toolbar Center = Group Border.
+        // So Toolbar Top = Group Border - 22.
+
+        // Group Border is at NodeTop - 100 * zoom.
+        // So for Groups: top is Group Border. Offset = 22.
+        // For Nodes: top is NodeTop. We want same visual position relative to content.
+        // So Toolbar Top = (NodeTop - 100 * zoom) - 22.
+        // Offset = 100 * zoom + 22.
+
+        const isGroupSelection = selectionType === 'groups' || selectionType === 'mixed';
+        const offset = isGroupSelection ? 22 : 22 + 100 * zoom;
+
+        return { top: top - offset, left: left + (right - left) / 2 };
+    }, [selectedNodes, selectedGroups, pan, zoom, selectionType]);
 
     const handleClearHistory = useCallback(() => {
         setHistory(h => h.filter(item => item.ownerId && item.ownerId !== currentUser.id && currentUser.role !== 'admin'));
@@ -1720,7 +1455,7 @@ const App: React.FC = () => {
             setTimeout(() => setToast(null), 2000);
         }
     }, [supabaseEnabled, currentUser]);
-
+    // API Key modal handlers
     const handleBulkDeleteHistory = useCallback(async (ids: string[]) => {
         if (!confirm(`确定要删除选中的 ${ids.length} 条记录吗？`)) return;
 
@@ -1888,15 +1623,15 @@ const App: React.FC = () => {
 
     return (
         <div
-            ref={containerRef}
+            ref={setContainerRef}
             className="w-screen h-screen overflow-hidden cursor-default text-slate-200 font-sans select-none"
+            onContextMenu={handleCanvasContextMenu}
         >
             <div
-                ref={canvasRef}
+                ref={setCanvasRef}
                 data-id="canvas-bg"
                 className="absolute top-0 left-0 w-full h-full cursor-grab active:cursor-grabbing"
                 onMouseDown={handleCanvasMouseDown}
-                onContextMenu={handleCanvasContextMenu}
                 style={{
                     backgroundColor: '#0f1118',
                     backgroundSize: `${40 * zoom}px ${40 * zoom}px`,
@@ -1930,12 +1665,16 @@ const App: React.FC = () => {
                             isActive={activeConnectionIds.has(conn.id)}
                         />
                     ))}
-                    {previewConnection && (
-                        <path
-                            d={`M ${previewConnection.start.x} ${previewConnection.start.y} C ${previewConnection.start.x + 50} ${previewConnection.start.y}, ${previewConnection.end.x - 50} ${previewConnection.end.y}, ${previewConnection.end.x} ${previewConnection.end.y}`}
-                            className="stroke-neon-blue fill-none opacity-60" strokeWidth="2" strokeDasharray="5 5"
-                        />
-                    )}
+                    {previewConnection && (() => {
+                        const dist = Math.abs(previewConnection.end.x - previewConnection.start.x);
+                        const control = Math.max(dist * 0.4, 20);
+                        return (
+                            <path
+                                d={`M ${previewConnection.start.x} ${previewConnection.start.y} C ${previewConnection.start.x + control} ${previewConnection.start.y}, ${previewConnection.end.x - control} ${previewConnection.end.y}, ${previewConnection.end.x} ${previewConnection.end.y}`}
+                                className="stroke-neon-blue fill-none opacity-60" strokeWidth="2" strokeDasharray="5 5"
+                            />
+                        );
+                    })()}
                     {snapLines.map((line, i) => (
                         <line
                             key={`snap-${i}`}
@@ -1986,7 +1725,7 @@ const App: React.FC = () => {
             {selectionBox && <div className="absolute border border-neon-blue/50 bg-neon-blue/10 pointer-events-none rounded-md backdrop-blur-[1px]" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />}
 
             {
-                toolbarPosition && selectionType !== 'none' && (
+                toolbarPosition && (selectedNodes.length > 1 || selectedGroups.length > 0) && (
                     <SelectionToolbar position={toolbarPosition} onGroup={groupSelectedNodes} onUngroup={ungroupSelectedNodes} selectionType={selectionType} />
                 )
             }

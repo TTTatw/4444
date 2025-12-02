@@ -2,6 +2,20 @@ import { Part, GenerateContentParameters, HarmProbability, FinishReason } from '
 import type { NodeType } from '../types';
 import { supabaseAuth } from './storageService';
 
+// Helper for fetch with timeout
+const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout = 60000) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(id);
+        return response;
+    } catch (error) {
+        clearTimeout(id);
+        throw error;
+    }
+};
+
 // Helper to build parts (kept for compatibility with existing logic)
 const buildParts = async (inputs: Input[], instruction: string): Promise<Part[]> => {
     const parts: Part[] = [];
@@ -14,7 +28,7 @@ const buildParts = async (inputs: Input[], instruction: string): Promise<Part[]>
                 // If input is a URL (from Supabase Storage), fetch and convert to base64
                 if (input.data.startsWith('http')) {
                     try {
-                        const response = await fetch(input.data);
+                        const response = await fetchWithTimeout(input.data, {}, 15000); // 15s timeout for images
                         const blob = await response.blob();
                         mimeType = blob.type || 'image/png';
                         base64Data = await new Promise((resolve) => {
@@ -124,7 +138,7 @@ export const runNode = async (
         }
 
         // Force localhost in development mode to avoid using production URL from .env files
-        const API_BASE = import.meta.env.DEV ? 'http://localhost:3000' : (import.meta.env.VITE_API_URL || 'https://4444-production.up.railway.app');
+        const API_BASE = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || 'https://4444-production.up.railway.app');
 
         // Construct payload
         const payload: any = {
@@ -169,14 +183,14 @@ export const runNode = async (
         }
 
         // 3. Call Backend Proxy
-        const response = await fetch(`${API_BASE}/api/generate`, {
+        const response = await fetchWithTimeout(`${API_BASE}/api/generate`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}`
             },
             body: JSON.stringify(payload)
-        });
+        }, 60000); // 60s timeout for generation
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
@@ -197,7 +211,7 @@ export const runNode = async (
                 return { type: 'image', content: data.image };
             }
             if (data.text) {
-                throw new Error(`生成失败 (模型返回了文本而非图片): ${data.text}`);
+                return { type: 'text', content: data.text };
             }
             throw new Error("生成失败: 未收到图片数据。");
         }

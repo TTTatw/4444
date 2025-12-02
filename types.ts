@@ -28,6 +28,7 @@ export interface Node {
   locked?: boolean; // read-only if true (for private workflows not owned)
   aspectRatio?: string;
   resolution?: string;
+  googleSearch?: boolean;
 }
 
 export interface Connection {

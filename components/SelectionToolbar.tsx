@@ -1,11 +1,10 @@
-
 import React from 'react';
 
 interface Props {
     position: { top: number; left: number };
     onGroup: () => void;
     onUngroup: () => void;
-    selectionType: 'node' | 'group';
+    selectionType: 'nodes' | 'groups' | 'mixed' | 'none';
 }
 
 const GroupIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /></svg>);
@@ -17,25 +16,27 @@ export const SelectionToolbar: React.FC<Props> = ({ position, onGroup, onUngroup
         top: `${position.top}px`,
         left: `${position.left}px`,
         transform: 'translateX(-50%)',
-        zIndex: 30,
+        zIndex: 50,
     };
 
+    if (selectionType === 'none') return null;
+
     return (
-        <div style={style} className="glass-panel rounded-full p-1.5 flex items-center space-x-1 animate-in zoom-in duration-200">
-            {selectionType === 'node' && (
+        <div style={style} className="glass-panel bg-slate-900/80 rounded-full p-1.5 flex items-center space-x-1 animate-in zoom-in duration-200">
+            {(selectionType === 'nodes' || selectionType === 'mixed') && (
                 <button
                     onClick={onGroup}
-                    className="p-2 text-slate-300 hover:text-white hover:bg-white/10 rounded-full transition-all hover:shadow-[0_0_10px_rgba(0,243,255,0.3)]"
-                    title="Group Selection"
+                    className="flex items-center justify-center w-8 h-8 text-slate-200 hover:text-white hover:bg-white/10 rounded-full transition-all border border-cyan-500/30 hover:border-cyan-400 hover:shadow-[0_0_10px_rgba(0,243,255,0.3)]"
+                    title="合并"
                 >
                     <GroupIcon />
                 </button>
             )}
-            {selectionType === 'group' && (
+            {(selectionType === 'groups' || selectionType === 'mixed') && (
                 <button
                     onClick={onUngroup}
-                    className="p-2 text-slate-300 hover:text-white hover:bg-white/10 rounded-full transition-all hover:shadow-[0_0_10px_rgba(188,19,254,0.3)]"
-                    title="Ungroup"
+                    className="flex items-center justify-center w-8 h-8 text-slate-200 hover:text-white hover:bg-white/10 rounded-full transition-all border border-cyan-500/30 hover:border-cyan-400 hover:shadow-[0_0_10px_rgba(188,19,254,0.3)]"
+                    title="解组"
                 >
                     <UngroupIcon />
                 </button>

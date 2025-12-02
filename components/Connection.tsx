@@ -33,10 +33,14 @@ export const Connection: React.FC<ConnectionProps> = ({ id, from, to, nodes, isS
     const endX = toNode.position.x;
     const endY = toNode.position.y + toHeight / 2;
 
-    const curveFactor = 0.35;
-    const c1X = startX + Math.abs(endX - startX) * curveFactor;
+    const curveFactor = 0.5;
+    const minControl = 50;
+    const dist = Math.abs(endX - startX);
+    const controlDist = Math.max(dist * curveFactor, minControl);
+
+    const c1X = startX + controlDist;
     const c1Y = startY;
-    const c2X = endX - Math.abs(endX - startX) * curveFactor;
+    const c2X = endX - controlDist;
     const c2Y = endY;
 
     const pathData = `M ${startX} ${startY} C ${c1X} ${c1Y}, ${c2X} ${c2Y}, ${endX} ${endY}`;
