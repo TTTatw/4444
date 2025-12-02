@@ -6,17 +6,23 @@ interface Props {
     item: HistoryItem;
     onClose: () => void;
     onDelete?: (id: string) => void;
+    onNext?: () => void;
+    onPrev?: () => void;
+    hasNext?: boolean;
+    hasPrev?: boolean;
 }
 
-export const HistoryDetailModal: React.FC<Props> = ({ item, onClose, onDelete }) => {
+export const HistoryDetailModal: React.FC<Props> = ({ item, onClose, onDelete, onNext, onPrev, hasNext, hasPrev }) => {
     // ... (keep existing useEffect and handleDownload) ...
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape') onClose();
+            if (e.key === 'ArrowLeft' && hasPrev && onPrev) onPrev();
+            if (e.key === 'ArrowRight' && hasNext && onNext) onNext();
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [onClose]);
+    }, [onClose, onNext, onPrev, hasNext, hasPrev]);
 
     const [dimensions, setDimensions] = React.useState<{ width: number; height: number } | null>(null);
 
@@ -50,11 +56,32 @@ export const HistoryDetailModal: React.FC<Props> = ({ item, onClose, onDelete })
             aria-modal="true"
         >
             <div
-                className="bg-[#2d2d2d] border border-slate-700 max-w-6xl w-full max-h-[90vh] rounded-lg shadow-2xl flex"
+                className="bg-[#2d2d2d] border border-slate-700 max-w-6xl w-full max-h-[90vh] rounded-lg shadow-2xl flex relative"
                 onClick={e => e.stopPropagation()}
             >
+                {/* Navigation Buttons */}
+                {hasPrev && (
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onPrev?.(); }}
+                        className="absolute left-4 top-1/2 -translate-y-1/2 z-20 p-2 rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors border border-white/10"
+                        title="Previous (Left Arrow)"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
+                    </button>
+                )}
+                {hasNext && (
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onNext?.(); }}
+                        className="absolute right-1/3 top-1/2 -translate-y-1/2 z-20 p-2 rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors border border-white/10"
+                        style={{ right: 'calc(33.333333% + 1rem)' }} // Adjust position to be on the image side
+                        title="Next (Right Arrow)"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
+                    </button>
+                )}
+
                 {/* Image Panel */}
-                <div className="flex-1 flex items-center justify-center p-4 bg-black/20">
+                <div className="flex-1 flex items-center justify-center p-4 bg-black/20 relative">
                     <img
                         src={item.image.startsWith('http') ? item.image : `data:image/png;base64,${item.image}`}
                         alt={item.nodeName}

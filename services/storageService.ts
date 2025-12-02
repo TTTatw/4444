@@ -3,7 +3,7 @@ import type { HistoryItem, SerializedConnection, SerializedNode, WorkflowAsset }
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const apiBase = (import.meta as any).env?.VITE_API_BASE_URL;
+const apiBase = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:3000';
 
 // Some browsers/contexts禁用 localStorage 会导致 “Access to storage is not allowed”。
 // 提供一个安全的 storage 选择：localStorage -> sessionStorage -> 内存。
@@ -352,7 +352,7 @@ export const upsertUser = async (user: { id?: string; name: string; password: st
         });
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
-            throw new Error(err.error || 'Failed to create user');
+            throw new Error((err.error || 'Failed to create user') + (err.detail ? `: ${err.detail}` : ''));
         }
         return;
     }

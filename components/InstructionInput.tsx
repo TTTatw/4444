@@ -6,6 +6,7 @@ interface InstructionInputProps {
     node: Node;
     onDataChange: (id: string, data: Partial<Node>) => void;
     onExecute: (nodeId: string, instruction: string) => void;
+    isOwner?: boolean;
 }
 
 const RunIcon = () => (
@@ -14,10 +15,10 @@ const RunIcon = () => (
     </svg>
 );
 
-export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onDataChange, onExecute }) => {
+export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onDataChange, onExecute, isOwner = true }) => {
     const [instruction, setInstruction] = useState(node.instruction);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const isLocked = node.locked;
+    // const isLocked = node.locked; // Deprecated in favor of isOwner
 
     // Sync local state if the active node changes
     useEffect(() => {
@@ -33,14 +34,14 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
     }, [instruction]);
 
     const handleInstructionChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
-        if (isLocked) return;
+        if (!isOwner) return;
         const newInstruction = e.target.value;
         setInstruction(newInstruction);
         onDataChange(node.id, { instruction: newInstruction });
     };
 
     const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-        if (isLocked) return;
+        if (!isOwner) return;
         onDataChange(node.id, { selectedModel: e.target.value });
     };
 
@@ -82,19 +83,15 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
                 <div className="relative bg-black/40 rounded-xl border border-white/5 overflow-hidden">
                     <textarea
                         ref={textareaRef}
-                        placeholder={isLocked ? '' : 'Enter instructions...'}
-                        value={isLocked ? '' : instruction}
+                        placeholder={!isOwner ? '不可修改' : 'Enter instructions...'}
+                        value={!isOwner ? '' : instruction}
                         onChange={handleInstructionChange}
                         onKeyDown={handleKeyDown}
-                        readOnly={isLocked}
-                        className={`w-full bg-transparent text-slate-200 p-3 text-sm resize-none focus:outline-none placeholder:text-slate-600 max-h-40 custom-scrollbar font-mono leading-relaxed ${isLocked ? 'cursor-not-allowed text-amber-200' : ''}`}
+                        readOnly={!isOwner}
+                        className={`w-full bg-transparent text-slate-200 p-3 text-sm resize-none focus:outline-none placeholder:text-slate-600 max-h-40 custom-scrollbar font-mono leading-relaxed ${!isOwner ? 'cursor-not-allowed text-slate-500' : ''}`}
                         rows={1}
                     />
-                    {isLocked && (
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-amber-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
-                        </div>
-                    )}
+                    {/* Removed Lock Icon as per request */}
                     <div className="absolute bottom-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/10 to-transparent"></div>
                 </div>
 
@@ -108,7 +105,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
                                     <select
                                         value={currentModel}
                                         onChange={handleModelChange}
-                                        disabled={isLocked}
+                                        disabled={!isOwner}
                                         className="text-[10px] font-bold text-slate-400 bg-transparent uppercase tracking-wider focus:outline-none cursor-pointer appearance-none disabled:opacity-60 disabled:cursor-not-allowed"
                                         onClick={e => e.stopPropagation()}
                                         onMouseDown={e => e.stopPropagation()}
@@ -122,7 +119,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
                                         <select
                                             value={node.aspectRatio || ''}
                                             onChange={(e) => onDataChange(node.id, { aspectRatio: e.target.value || undefined })}
-                                            disabled={isLocked}
+                                            disabled={!isOwner}
                                             className="text-[10px] font-bold text-slate-400 bg-transparent uppercase tracking-wider focus:outline-none cursor-pointer appearance-none disabled:opacity-60 disabled:cursor-not-allowed border-l border-white/10 pl-2"
                                             onClick={e => e.stopPropagation()}
                                             onMouseDown={e => e.stopPropagation()}
@@ -147,7 +144,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
                                         <select
                                             value={node.resolution || ''}
                                             onChange={(e) => onDataChange(node.id, { resolution: e.target.value || undefined })}
-                                            disabled={isLocked}
+                                            disabled={!isOwner}
                                             className="text-[10px] font-bold text-slate-400 bg-transparent uppercase tracking-wider focus:outline-none cursor-pointer appearance-none disabled:opacity-60 disabled:cursor-not-allowed border-l border-white/10 pl-2"
                                             onClick={e => e.stopPropagation()}
                                             onMouseDown={e => e.stopPropagation()}
@@ -165,11 +162,11 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
                                         <button
                                             onClick={(e) => {
                                                 e.stopPropagation();
-                                                if (!isLocked) {
+                                                if (!!isOwner) {
                                                     onDataChange(node.id, { googleSearch: !node.googleSearch });
                                                 }
                                             }}
-                                            disabled={isLocked}
+                                            disabled={!isOwner}
                                             className={`ml-2 p-1 rounded-md transition-colors ${node.googleSearch ? 'bg-neon-blue/20 text-neon-blue' : 'text-slate-500 hover:text-slate-300'}`}
                                             title="Enable Google Search Grounding"
                                         >
@@ -185,7 +182,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
                                     <select
                                         value={currentModel}
                                         onChange={handleModelChange}
-                                        disabled={isLocked}
+                                        disabled={!isOwner}
                                         className="text-[10px] font-bold text-slate-400 bg-transparent uppercase tracking-wider focus:outline-none cursor-pointer appearance-none disabled:opacity-60 disabled:cursor-not-allowed"
                                         onClick={e => e.stopPropagation()}
                                         onMouseDown={e => e.stopPropagation()}
@@ -199,11 +196,11 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
                                         <button
                                             onClick={(e) => {
                                                 e.stopPropagation();
-                                                if (!isLocked) {
+                                                if (!!isOwner) {
                                                     onDataChange(node.id, { googleSearch: !node.googleSearch });
                                                 }
                                             }}
-                                            disabled={isLocked}
+                                            disabled={!isOwner}
                                             className={`ml-2 p-1 rounded-md transition-colors ${node.googleSearch ? 'bg-neon-blue/20 text-neon-blue' : 'text-slate-500 hover:text-slate-300'}`}
                                             title="Enable Google Search Grounding"
                                         >

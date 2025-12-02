@@ -23,6 +23,7 @@ import { useNodeDrag } from './hooks/useNodeDrag';
 import { useConnection } from './hooks/useConnection';
 import { useSelection } from './hooks/useSelection';
 import { useCanvasInteraction } from './hooks/useCanvasInteraction';
+import { useAuth } from './hooks/useAuth';
 import { TextIcon, ImageIcon } from './components/Icons';
 
 
@@ -47,19 +48,30 @@ export const App = () => {
     const [toast, setToast] = useState<string | null>(null);
 
     // Auth & User
-    const [currentUser, setCurrentUser] = useState<{ role: 'admin' | 'user' | 'guest'; name: string; id?: string }>({ role: 'guest', name: 'Guest' });
-    const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-    const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
-    const [apiKey, setApiKey] = useState<string | null>(localStorage.getItem('user-api-key'));
-    const [apiKeyDraft, setApiKeyDraft] = useState('');
-    const [authorizedUsers, setAuthorizedUsers] = useState<{ id?: string; name: string; password: string; }[]>([]);
-    const [newAuthorizedName, setNewAuthorizedName] = useState('');
-    const [newAuthorizedPassword, setNewAuthorizedPassword] = useState('');
-    const [loginName, setLoginName] = useState('');
-    const [loginPassword, setLoginPassword] = useState('');
-    const [newUserEmail, setNewUserEmail] = useState('');
-    const [newUserPassword, setNewUserPassword] = useState('');
-    const [authLoading, setAuthLoading] = useState(true);
+    const {
+        currentUser, setCurrentUser,
+        authorizedUsers, setAuthorizedUsers,
+        loginName, setLoginName,
+        loginPassword, setLoginPassword,
+        authLoading,
+        supabaseEnabled,
+        isAuthModalOpen, setIsAuthModalOpen,
+        isApiKeyModalOpen, setIsApiKeyModalOpen,
+        apiKey, setApiKey,
+        apiKeyDraft, setApiKeyDraft,
+        newUserEmail, setNewUserEmail,
+        newUserPassword, setNewUserPassword,
+        newAuthorizedName, setNewAuthorizedName,
+        newAuthorizedPassword, setNewAuthorizedPassword,
+        handleLogin,
+        handleLogout,
+        handleCreateUser,
+        handleAddAuthorizedUser,
+        handleRemoveAuthorizedUser,
+        persistAuthorizedUsers,
+        handleSaveApiKey,
+        handleClearApiKey
+    } = useAuth();
     const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
     const [isAssetLibraryOpen, setIsAssetLibraryOpen] = useState(false);
     const [isAdminDashboardOpen, setIsAdminDashboardOpen] = useState(false);
@@ -91,7 +103,7 @@ export const App = () => {
 
     const clipboard = useRef<{ nodes: Node[]; connections: ConnectionType[]; groups: Group[] } | null>(null);
 
-    const supabaseEnabled = isSupabaseConfigured();
+
 
 
 
@@ -595,11 +607,23 @@ export const App = () => {
         const groupId = `group-${Date.now()}`;
         const nodeIds = nodesToGroup.map(n => n.id);
 
+        // Taint Logic: If any node is from a restricted source, the group becomes restricted
+        let groupOwnerId: string | undefined = undefined;
+        let groupVisibility: 'public' | 'private' | undefined = undefined;
+
+        const restrictedNode = nodesToGroup.find(n => n.sourceVisibility === 'private' && n.ownerId && n.ownerId !== currentUser.id && currentUser.role !== 'admin');
+        if (restrictedNode) {
+            groupOwnerId = restrictedNode.ownerId;
+            groupVisibility = 'private';
+        }
+
         const newGroup: Group = {
             id: groupId, name: `New Group ${groups.length + 1}`, nodeIds,
             position: { x: minX - PADDING, y: minY - PADDING - HEADER_SPACE },
             size: { width: (maxX - minX) + 2 * PADDING, height: (maxY - minY) + 2 * PADDING + HEADER_SPACE },
             selected: true,
+            ownerId: groupOwnerId,
+            visibility: groupVisibility,
         };
 
         setNodes(ns => ns.map(n => nodeIds.includes(n.id) ? { ...n, groupId, selected: false } : { ...n, selected: false }));
@@ -704,16 +728,23 @@ export const App = () => {
         }
     };
 
+    const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+
     const runGroupWorkflow = async (groupId: string) => {
         const group = groups.find(g => g.id === groupId);
         if (!group) return;
+
+        setIsBatchProcessing(true); // Start batch mode
 
         const groupNodeIds = new Set(group.nodeIds);
         const allNodesInGroup = nodesRef.current.filter(n => groupNodeIds.has(n.id));
         // Topology uses only internal connections to determine execution order
         const groupConnections = connectionsRef.current.filter(c => groupNodeIds.has(c.from) && groupNodeIds.has(c.to));
 
-        if (allNodesInGroup.length === 0) return;
+        if (allNodesInGroup.length === 0) {
+            setIsBatchProcessing(false);
+            return;
+        }
 
         // 1. Initialize Topology
         const adj = new Map<string, string[]>();
@@ -772,10 +803,20 @@ export const App = () => {
             return n;
         }));
 
+        // Track active executions to know when to turn off batch mode
+        let activeExecutions = 0;
+        const checkBatchCompletion = () => {
+            if (activeExecutions <= 0) {
+                setIsBatchProcessing(false);
+            }
+        };
+
         // 3. Parallel Execution Function
         const triggerNode = async (nodeId: string) => {
             const currentNodeData = executionData.get(nodeId);
             if (!currentNodeData) return;
+
+            activeExecutions++;
 
             // Set 'running' state in UI
             setNodes(ns => ns.map(n => n.id === nodeId ? { ...n, status: 'running' } : n));
@@ -810,6 +851,10 @@ export const App = () => {
                     // It's a static provider node (like an uploaded image with no prompt).
                     // We don't need to call API. We just mark success so children can run.
                     // The data is already in executionData.
+
+                    // FIX: Explicitly set status to success for static nodes so they don't get stuck in 'running'
+                    setNodes(ns => ns.map(n => n.id === nodeId ? { ...n, status: 'success' } : n));
+                    executionData.set(nodeId, { ...currentNodeData, status: 'success' });
                 } else {
                     // Prepare inputs from executionData
                     // Since executionData now has all nodes, this works for external dependencies too.
@@ -900,6 +945,9 @@ export const App = () => {
                 setNodes(ns => ns.map(n => n.id === nodeId ? { ...n, status: 'error', content: errorMessage } : n));
                 console.error(`Workflow execution failed at node ${nodeId}.`);
             } finally {
+                activeExecutions--;
+                checkBatchCompletion();
+
                 // Remove connections highlights (Subtractive)
                 if (incomingConnIds.length > 0) {
                     setActiveConnectionIds(prev => {
@@ -908,8 +956,6 @@ export const App = () => {
                         return next;
                     });
                 }
-
-                // Remove connections highlights (Subtractive)
             }
         };
 
@@ -997,55 +1043,7 @@ export const App = () => {
 
 
     // Load auth state and authorized users (with Supabase fallback)
-    const deriveRole = useCallback((email?: string, metadataRole?: string) => {
-        const adminList = (((import.meta as any).env?.VITE_ADMIN_EMAILS) || '')
-            .split(',')
-            .map((s: string) => s.trim().toLowerCase())
-            .filter(Boolean);
-        const em = (email || '').trim().toLowerCase();
-        const isAdmin = metadataRole === 'admin' || adminList.includes(em);
-        console.log('[auth] email=', em, 'metadataRole=', metadataRole, 'envAdmins=', adminList, 'isAdmin=', isAdmin);
-        return isAdmin ? 'admin' : 'user';
-    }, []);
 
-    useEffect(() => {
-        const auth = supabaseAuth();
-        if (!auth) return;
-        auth.getSession().then(({ data }) => {
-            const session = data.session;
-            if (session?.user) {
-                const role = deriveRole(session.user.email || '', (session.user.user_metadata as any)?.role);
-                setCurrentUser({ role, name: session.user.email || 'User', id: session.user.id });
-            } else {
-                setIsAuthModalOpen(true);
-            }
-        }).finally(() => setAuthLoading(false));
-        const { data: sub } = auth.onAuthStateChange((_event, session) => {
-            if (session?.user) {
-                const role = deriveRole(session.user.email || '', (session.user.user_metadata as any)?.role);
-                setCurrentUser({ role, name: session.user.email || 'User', id: session.user.id });
-                setIsAuthModalOpen(false); // 登录后自动关闭弹窗
-            } else {
-                setCurrentUser({ role: 'guest', name: 'Guest' });
-                setIsAuthModalOpen(true); // 未登录时显示登录
-                setIsAccountModalOpen(false);
-            }
-        });
-        return () => { sub?.subscription.unsubscribe(); };
-    }, [deriveRole]);
-
-    useEffect(() => {
-        const loadUsersForAdmin = async () => {
-            if (!supabaseEnabled || currentUser.role !== 'admin') return;
-            try {
-                const remoteUsers = await fetchUsers();
-                setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.email || u.name, password: u.password })));
-            } catch (error) {
-                console.error("Failed to load users from Supabase:", error);
-            }
-        };
-        loadUsersForAdmin();
-    }, [supabaseEnabled, currentUser]);
 
     const saveAssets = useCallback(async (updatedAssets: WorkflowAsset[]) => {
         const normalized = updatedAssets.map(a => ({
@@ -1068,11 +1066,27 @@ export const App = () => {
             return;
         }
 
+        // Security Check: Prevent saving shared private workflows
+        const group = groups.find(g => g.id === groupToSave.id);
+        if (group && group.visibility === 'private' && group.ownerId && group.ownerId !== currentUser.id && currentUser.role !== 'admin') {
+            alert('私有共享工作流不可保存');
+            return;
+        }
+
         const groupNodeIds = new Set(groupToSave.nodeIds);
         const workflowNodes = nodes.filter(n => groupNodeIds.has(n.id));
         const workflowConnections = connections.filter(c => groupNodeIds.has(c.from) && groupNodeIds.has(c.to));
 
         if (workflowNodes.length === 0) return;
+
+        // Name Collision Check for Public Workflows
+        if (details.visibility === 'public') {
+            const existingPublic = assets.find(a => a.visibility === 'public' && a.name === details.name);
+            if (existingPublic) {
+                alert('Public workflow with this name already exists. Please choose a different name.');
+                return;
+            }
+        }
 
         const generatedNodeIdsInGroup = new Set(workflowConnections.map(c => c.to));
 
@@ -1155,7 +1169,7 @@ export const App = () => {
 
         const visibility = (workflow as WorkflowAsset).visibility || 'public';
         const ownerId = (workflow as WorkflowAsset).ownerId;
-        const shouldLock = visibility === 'private' && ownerId && currentUser.role !== 'admin' && ownerId !== currentUser.id;
+        // const shouldLock = visibility === 'private' && ownerId && currentUser.role !== 'admin' && ownerId !== currentUser.id;
         const isPreset = Array.isArray((workflow as WorkflowAsset).tags) && (workflow as WorkflowAsset).tags!.includes('preset');
 
         // 1. Calculate new workflow bounds
@@ -1215,7 +1229,9 @@ export const App = () => {
                     y: (Number(nodeData.position?.y) || 0) - minY + targetPos.y,
                 },
                 selectedModel: nodeData.selectedModel,
-                locked: shouldLock,
+                ownerId: ownerId, // Track origin owner
+                sourceVisibility: visibility, // Track origin visibility for security
+                // locked: shouldLock, // Removed global lock
             };
         });
         const loadedConnections: ConnectionType[] = workflow.connections.map((connData: SerializedConnection) => {
@@ -1247,6 +1263,8 @@ export const App = () => {
                 position: { x: bounds.left - GROUP_PADDING, y: bounds.top - GROUP_PADDING - HEADER_SPACE },
                 size,
                 selected: true,
+                ownerId: ownerId,
+                visibility: visibility,
             }]);
         }
 
@@ -1301,6 +1319,22 @@ export const App = () => {
                 if (selectedConnectionId) {
                     setConnections(cs => cs.filter(c => c.id !== selectedConnectionId));
                     setSelectedConnectionId(null);
+                }
+            }
+
+            // --- SAVE (Ctrl+S) ---
+            if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                e.preventDefault();
+                // Find if there's a selected group or active group to save
+                const groupToSave = selectedGroups.length === 1 ? selectedGroups[0] : null;
+                if (groupToSave) {
+                    // Security Check
+                    if (groupToSave.visibility === 'private' && groupToSave.ownerId && groupToSave.ownerId !== currentUser.id && currentUser.role !== 'admin') {
+                        alert('私有共享工作流不可保存');
+                        return;
+                    }
+                    setGroupToSave(groupToSave);
+                    setIsSaveAssetModalOpen(true);
                 }
             }
 
@@ -1388,7 +1422,7 @@ export const App = () => {
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedGroups, selectedConnectionId, ungroupSelectedNodes, activeNodeId, undo, redo, recordHistory, deselectAll]);
+    }, [selectedGroups, selectedConnectionId, ungroupSelectedNodes, activeNodeId, undo, redo, recordHistory, deselectAll, currentUser]);
 
     const toolbarPosition = useMemo(() => {
         if (!canvas || (selectedNodes.length === 0 && selectedGroups.length === 0)) return null;
@@ -1477,138 +1511,12 @@ export const App = () => {
         }
     }, [supabaseEnabled, currentUser]);
 
-    // API Key modal handlers
-    const handleSaveApiKey = () => {
-        setApiKey(apiKeyDraft.trim() || null);
-        try {
-            if (apiKeyDraft.trim()) {
-                localStorage.setItem('user-api-key', apiKeyDraft.trim());
-            } else {
-                localStorage.removeItem('user-api-key');
-            }
-            setIsApiKeyModalOpen(false);
-        } catch (e) {
-            console.error('Failed to save API key:', e);
-        }
-    };
 
-    const handleClearApiKey = () => {
-        setApiKey(null);
-        setApiKeyDraft('');
-        localStorage.removeItem('user-api-key');
-    };
-
-    // Auth handlers
-    const persistAuthorizedUsers = (users: { id?: string; name: string; password: string; }[]) => {
-        setAuthorizedUsers(users);
-        try {
-            localStorage.setItem('authorized-users', JSON.stringify(users));
-        } catch (error) {
-            console.error("Failed to save authorized users:", error);
-        }
-    };
-    const handleLogin = async (register = false, email = loginName, password = loginPassword) => {
-        const auth = supabaseAuth();
-        if (!auth) {
-            // Offline/Local mode fallback
-            console.warn("Supabase not configured, using local offline mode.");
-            setCurrentUser({ role: 'admin', name: email || 'Local User', id: 'local-user' });
-            setIsAuthModalOpen(false);
-            setToast('已进入离线模式');
-            setTimeout(() => setToast(null), 2000);
-            return;
-        }
-        try {
-            if (register) {
-                const { error } = await auth.signUp({ email, password });
-                if (error) throw error;
-                setToast('注册成功，请登录');
-                setTimeout(() => setToast(null), 2000);
-                return;
-            }
-            const { data, error } = await auth.signInWithPassword({ email, password });
-            if (error || !data.session) throw error || new Error('No session');
-            const role = deriveRole(data.session.user.email || '', (data.session.user.user_metadata as any)?.role);
-            setCurrentUser({ role, name: data.session.user.email || 'User', id: data.session.user.id });
-            setIsAuthModalOpen(false);
-        } catch (error) {
-            alert("登录失败，请检查邮箱/密码");
-        }
-    };
-
-    // Admin create new user via Supabase Auth (email/password)
-    const handleCreateUser = async () => {
-        if (!newUserEmail || !newUserPassword) {
-            alert('请输入授权邮箱和密码');
-            return;
-        }
-        try {
-            await upsertUser({ name: newUserEmail.trim(), password: newUserPassword });
-            setToast('创建授权账号成功');
-            setNewUserEmail('');
-            setNewUserPassword('');
-            setTimeout(() => setToast(null), 2000);
-            // refresh list
-            const remoteUsers = await fetchUsers();
-            setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.name, password: u.password })));
-        } catch (err) {
-            alert('创建授权账号失败：' + (err as Error).message);
-        }
-    };
-
-    const handleLogout = async () => {
-        if (supabaseEnabled) {
-            await supabaseAuth()?.signOut();
-        }
-        setCurrentUser({ role: 'guest', name: 'Guest' });
-        setLoginName('');
-        setLoginPassword('');
-        setNodes([]);
-        setConnections([]);
-        setGroups([]);
-        setHistory([]);
-        setSessionHistory([]);
-        setAssets([]);
-        setToast('已登出');
-        setTimeout(() => setToast(null), 2000);
-    };
-
-    const handleAddAuthorizedUser = async () => {
-        if (!supabaseEnabled) return;
-        if (!newAuthorizedName || !newAuthorizedPassword) return;
-        try {
-            const auth = supabaseAuth();
-            if (auth) {
-                const { error } = await auth.signUp({ email: newAuthorizedName, password: newAuthorizedPassword });
-                if (error) throw error;
-            }
-            await upsertUser({ name: newAuthorizedName, password: '' });
-            const remoteUsers = await fetchUsers();
-            setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.email || u.name, password: u.password })));
-            setNewAuthorizedName('');
-            setNewAuthorizedPassword('');
-            setToast('已添加授权账号');
-            setTimeout(() => setToast(null), 2000);
-        } catch (error) {
-            alert('添加授权账号失败，请检查邮箱是否已存在');
-        }
-    };
-    const handleRemoveAuthorizedUser = async (name: string) => {
-        if (!supabaseEnabled) return;
-        try {
-            const target = authorizedUsers.find(u => u.name === name);
-            if (target?.id) await deleteUser(target.id);
-            const remoteUsers = await fetchUsers();
-            setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.email || u.name, password: u.password })));
-        } catch (error) {
-            console.error("Failed to delete user:", error);
-        }
-    };
 
     if (authLoading) {
         return (
             <div className="w-screen h-screen bg-[#0f1118] flex items-center justify-center text-slate-200">
-                <div className="animate-spin h-10 w-10 border-2 border-slate-600 border-t-transparent rounded-full"></div>
+                <div className="animate-spin h-10 w-10 border-2 border-neon-blue border-t-transparent rounded-full"></div>
             </div>
         );
     }
@@ -1694,6 +1602,7 @@ export const App = () => {
                         onMouseDown={handleGroupMouseDown}
                         onSaveAsset={(groupId) => { setGroupToSave(groups.find(g => g.id === groupId) || null); setIsSaveAssetModalOpen(true); }}
                         onUpdateName={(id, name) => setGroups(gs => gs.map(g => g.id === id ? { ...g, name } : g))}
+                        isSaveDisabled={group.visibility === 'private' && group.ownerId !== undefined && group.ownerId !== currentUser.id && currentUser.role !== 'admin'}
                     />
                 ))}
 
@@ -1708,6 +1617,8 @@ export const App = () => {
                         onViewContent={(type, content, name) => setViewerContent({ type, content, name })}
                         isGenerated={generatedNodeIds.has(node.id)}
                         onContextMenu={handleNodeContextMenu}
+                        isBatchProcessing={isBatchProcessing}
+                        isOwner={!node.ownerId || node.ownerId === currentUser.id}
                     />
                 ))}
 
@@ -1716,6 +1627,7 @@ export const App = () => {
                         node={activeNode}
                         onDataChange={updateNodeData}
                         onExecute={(nodeId, instruction) => executeNode(nodeId, instruction)}
+                        isOwner={!activeNode.ownerId || activeNode.ownerId === currentUser.id}
                     />
                 )}
             </div>
@@ -1738,7 +1650,21 @@ export const App = () => {
                 )
             }
 
-            {selectedHistoryItem && <HistoryDetailModal item={selectedHistoryItem} onClose={() => setSelectedHistoryItem(null)} />}
+            {selectedHistoryItem && (() => {
+                const currentIndex = history.findIndex(h => h.id === selectedHistoryItem.id);
+                const hasPrev = currentIndex > 0;
+                const hasNext = currentIndex < history.length - 1;
+                return (
+                    <HistoryDetailModal
+                        item={selectedHistoryItem}
+                        onClose={() => setSelectedHistoryItem(null)}
+                        onPrev={() => hasPrev && setSelectedHistoryItem(history[currentIndex - 1])}
+                        onNext={() => hasNext && setSelectedHistoryItem(history[currentIndex + 1])}
+                        hasPrev={hasPrev}
+                        hasNext={hasNext}
+                    />
+                );
+            })()}
 
             {
                 isHistoryModalOpen && (
@@ -1887,6 +1813,7 @@ export const App = () => {
                             a.click();
                         }}
                         onDelete={handleDeleteAsset}
+                        currentUser={currentUser}
                     />
                 )
             }

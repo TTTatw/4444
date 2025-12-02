@@ -7,6 +7,7 @@ interface Props {
     onAdd: (asset: WorkflowAsset) => void;
     onDownload: (asset: WorkflowAsset) => void;
     onDelete: (assetId: string) => void;
+    currentUser: { id: string; role: string; name: string };
 }
 
 const AddIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>);
@@ -21,15 +22,21 @@ const getPreview = (asset: WorkflowAsset) => {
     return null;
 };
 
-export const AssetLibrary: React.FC<Props> = ({ assets, onClose, onAdd, onDownload, onDelete }) => {
-    const [tab, setTab] = useState<'workflow' | 'preset'>('workflow');
+export const AssetLibrary: React.FC<Props> = ({ assets, onClose, onAdd, onDownload, onDelete, currentUser }) => {
+    const [tab, setTab] = useState<'public' | 'personal' | 'preset'>('public');
     const [filterTag, setFilterTag] = useState<string>('all');
 
     const scopedAssets = useMemo(() => {
-        return tab === 'workflow'
-            ? assets.filter(a => !(a.tags || []).includes('preset'))
-            : assets.filter(a => (a.tags || []).includes('preset'));
-    }, [assets, tab]);
+        if (tab === 'public') {
+            return assets.filter(a => a.visibility === 'public' && !(a.tags || []).includes('preset'));
+        } else if (tab === 'personal') {
+            // Personal: Private workflows (excluding presets)
+            return assets.filter(a => a.visibility === 'private' && !(a.tags || []).includes('preset'));
+        } else {
+            // Preset
+            return assets.filter(a => (a.tags || []).includes('preset'));
+        }
+    }, [assets, tab, currentUser.id]);
 
     const tags = useMemo(() => {
         const t = new Set<string>();
@@ -57,9 +64,13 @@ export const AssetLibrary: React.FC<Props> = ({ assets, onClose, onAdd, onDownlo
                         <h2 id="asset-library-title" className="text-xl font-bold text-slate-100">资源库</h2>
                         <div className="flex bg-slate-800/80 rounded-full p-1">
                             <button
-                                className={`px-3 py-1 text-sm rounded-full ${tab === 'workflow' ? 'bg-slate-600 text-white' : 'text-slate-300'}`}
-                                onClick={() => { setTab('workflow'); setFilterTag('all'); }}
-                            >工作流</button>
+                                className={`px-3 py-1 text-sm rounded-full ${tab === 'public' ? 'bg-slate-600 text-white' : 'text-slate-300'}`}
+                                onClick={() => { setTab('public'); setFilterTag('all'); }}
+                            >公共库</button>
+                            <button
+                                className={`px-3 py-1 text-sm rounded-full ${tab === 'personal' ? 'bg-slate-600 text-white' : 'text-slate-300'}`}
+                                onClick={() => { setTab('personal'); setFilterTag('all'); }}
+                            >个人库</button>
                             <button
                                 className={`px-3 py-1 text-sm rounded-full ${tab === 'preset' ? 'bg-slate-600 text-white' : 'text-slate-300'}`}
                                 onClick={() => { setTab('preset'); setFilterTag('all'); }}
@@ -89,7 +100,7 @@ export const AssetLibrary: React.FC<Props> = ({ assets, onClose, onAdd, onDownlo
                 <div className="flex-grow p-4 overflow-y-auto custom-scrollbar">
                     {filteredAssets.length === 0 ? (
                         <div className="flex items-center justify-center h-full text-slate-400">
-                            <p>暂无 {tab === 'workflow' ? '工作流' : '预设'} 资源</p>
+                            <p>暂无 {tab === 'public' ? '公共' : (tab === 'personal' ? '个人' : '预设')} 资源</p>
                         </div>
                     ) : tab === 'preset' ? (
                         <div className="max-h-[60vh] overflow-y-auto custom-scrollbar">
@@ -136,29 +147,48 @@ export const AssetLibrary: React.FC<Props> = ({ assets, onClose, onAdd, onDownlo
                         </div>
                     ) : (
                         <ul className="space-y-2">
-                            {filteredAssets.map(asset => (
-                                <li key={asset.id} className="bg-slate-800/60 rounded-lg p-3 flex items-center justify-between transition-colors hover:bg-slate-700/80">
-                                    <div className="space-y-1">
-                                        <div className="flex items-center gap-2">
-                                            <p className="font-semibold text-slate-100">{asset.name}</p>
-                                            <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wide ${asset.visibility === 'private' ? 'bg-amber-900/60 text-amber-200 border border-amber-500/40' : 'bg-emerald-900/50 text-emerald-200 border border-emerald-500/40'}`}>
-                                                {asset.visibility === 'private' ? '个人' : '公开'}
-                                            </span>
+                            {filteredAssets.map(asset => {
+                                const isOwner = asset.ownerId === currentUser.id;
+                                const isAdmin = currentUser.role === 'admin';
+                                // Download Logic:
+                                // Public: Allowed.
+                                // Personal: Allowed if Owner. Disallowed if not owner (Admin's private).
+                                const canDownload = asset.visibility === 'public' || isOwner;
+                                const canDelete = isOwner || isAdmin;
+
+                                return (
+                                    <li key={asset.id} className="bg-slate-800/60 rounded-lg p-3 flex items-center justify-between transition-colors hover:bg-slate-700/80">
+                                        <div className="space-y-1">
+                                            <div className="flex items-center gap-2">
+                                                <p className="font-semibold text-slate-100">{asset.name}</p>
+                                                <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wide ${asset.visibility === 'private' ? 'bg-amber-900/60 text-amber-200 border border-amber-500/40' : 'bg-emerald-900/50 text-emerald-200 border border-emerald-500/40'}`}>
+                                                    {asset.visibility === 'private' ? '私有' : '公开'}
+                                                </span>
+                                                {asset.visibility === 'public' && asset.ownerId && (
+                                                    <span className="text-[10px] text-slate-500 ml-2">
+                                                        by {asset.ownerId === currentUser.id ? 'Me' : (asset.ownerId.includes('@') ? asset.ownerId : 'Admin')}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <p className="text-sm text-slate-400">{asset.notes || '无备注'}</p>
+                                            <div className="flex flex-wrap gap-1 mt-1">
+                                                {(asset.tags && asset.tags.length > 0 ? asset.tags : ['无标签']).map(tag => (
+                                                    <span key={tag} className="text-xs bg-sky-800/50 text-sky-300 px-2 py-0.5 rounded-full">{tag}</span>
+                                                ))}
+                                            </div>
                                         </div>
-                                        <p className="text-sm text-slate-400">{asset.notes || '无备注'}</p>
-                                        <div className="flex flex-wrap gap-1 mt-1">
-                                            {(asset.tags && asset.tags.length > 0 ? asset.tags : ['无标签']).map(tag => (
-                                                <span key={tag} className="text-xs bg-sky-800/50 text-sky-300 px-2 py-0.5 rounded-full">{tag}</span>
-                                            ))}
+                                        <div className="flex items-center space-x-2 flex-shrink-0">
+                                            <button onClick={() => { onAdd(asset); onClose(); }} className="p-2 text-slate-300 hover:bg-slate-600 rounded-md" title="添加到画布"><AddIcon /></button>
+                                            {canDownload && (
+                                                <button onClick={() => onDownload(asset)} className="p-2 text-slate-300 hover:bg-slate-600 rounded-md" title="下载"><DownloadIcon /></button>
+                                            )}
+                                            {canDelete && (
+                                                <button onClick={() => onDelete(asset.id)} className="p-2 text-red-400 hover:bg-red-500/20 rounded-md" title="删除"><DeleteIcon /></button>
+                                            )}
                                         </div>
-                                    </div>
-                                    <div className="flex items-center space-x-2 flex-shrink-0">
-                                        <button onClick={() => { onAdd(asset); onClose(); }} className="p-2 text-slate-300 hover:bg-slate-600 rounded-md" title="添加到画布"><AddIcon /></button>
-                                        <button onClick={() => onDownload(asset)} className="p-2 text-slate-300 hover:bg-slate-600 rounded-md" title="下载"><DownloadIcon /></button>
-                                        <button onClick={() => onDelete(asset.id)} className="p-2 text-red-400 hover:bg-red-500/20 rounded-md" title="删除"><DeleteIcon /></button>
-                                    </div>
-                                </li>
-                            ))}
+                                    </li>
+                                );
+                            })}
                         </ul>
                     )}
                 </div>

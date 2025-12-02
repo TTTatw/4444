@@ -29,6 +29,8 @@ export interface Node {
   aspectRatio?: string;
   resolution?: string;
   googleSearch?: boolean;
+  ownerId?: string;
+  sourceVisibility?: 'public' | 'private';
 }
 
 export interface Connection {
@@ -44,6 +46,8 @@ export interface Group {
   position: Point;
   size: { width: number; height: number };
   selected?: boolean;
+  ownerId?: string;
+  visibility?: 'public' | 'private';
 }
 
 export interface ContextMenu {
@@ -101,4 +105,14 @@ export interface WorkflowAsset {
   connections: SerializedConnection[];
   visibility?: 'public' | 'private';
   ownerId?: string;
+}
+
+export type Role = 'admin' | 'user' | 'guest';
+
+export interface User {
+  id: string;
+  name: string;
+  role: Role;
+  password?: string; // For authorized users list
+  email?: string;
 }

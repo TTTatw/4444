@@ -7,12 +7,13 @@ interface GroupProps {
     onMouseDown: (groupId: string, e: React.MouseEvent) => void;
     onSaveAsset: (groupId: string) => void;
     onUpdateName: (groupId: string, newName: string) => void;
+    isSaveDisabled?: boolean;
 }
 
 const SaveIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>);
 const RunIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M8 5.14v14l11-7-11-7z" /></svg>);
 
-export const GroupComponent: React.FC<GroupProps> = ({ group, onRunWorkflow, onMouseDown, onSaveAsset, onUpdateName }) => {
+export const GroupComponent: React.FC<GroupProps> = ({ group, onRunWorkflow, onMouseDown, onSaveAsset, onUpdateName, isSaveDisabled }) => {
     const [isNameEditing, setIsNameEditing] = useState(false);
 
     const groupStyle: React.CSSProperties = {
@@ -69,9 +70,10 @@ export const GroupComponent: React.FC<GroupProps> = ({ group, onRunWorkflow, onM
                 </div>
                 <div className="flex items-center gap-2 pointer-events-auto">
                     <button
-                        onClick={(e) => { e.stopPropagation(); onSaveAsset(group.id); }}
-                        className="flex items-center space-x-2 bg-slate-700 hover:bg-slate-600 rounded-md px-3 py-1.5 text-xs font-bold shadow-lg transition-colors"
-                        title="另存为资产"
+                        onClick={(e) => { e.stopPropagation(); !isSaveDisabled && onSaveAsset(group.id); }}
+                        className={`flex items-center space-x-2 rounded-md px-3 py-1.5 text-xs font-bold shadow-lg transition-colors ${isSaveDisabled ? 'bg-slate-700/50 text-slate-500 cursor-not-allowed' : 'bg-slate-700 hover:bg-slate-600'}`}
+                        title={isSaveDisabled ? "私有共享工作流不可保存" : "另存为资产"}
+                        disabled={isSaveDisabled}
                     >
                         <SaveIcon />
                         <span>保存</span>
