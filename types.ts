@@ -72,6 +72,7 @@ export interface HistoryItem {
   context: string;
   nodeName: string;
   ownerId?: string;
+  isPromptSecret?: boolean;
 }
 
 // Specific types for serialized (saved) workflow data

@@ -41,7 +41,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
     };
 
     const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-        if (!isOwner) return;
+        // if (!isOwner) return; // Allow non-owners to change model
         onDataChange(node.id, { selectedModel: e.target.value });
     };
 
@@ -105,7 +105,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
                                     <select
                                         value={currentModel}
                                         onChange={handleModelChange}
-                                        disabled={!isOwner}
+                                        // disabled={!isOwner} // Allow non-owners
                                         className="text-[10px] font-bold text-slate-400 bg-transparent uppercase tracking-wider focus:outline-none cursor-pointer appearance-none disabled:opacity-60 disabled:cursor-not-allowed"
                                         onClick={e => e.stopPropagation()}
                                         onMouseDown={e => e.stopPropagation()}
@@ -119,7 +119,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
                                         <select
                                             value={node.aspectRatio || ''}
                                             onChange={(e) => onDataChange(node.id, { aspectRatio: e.target.value || undefined })}
-                                            disabled={!isOwner}
+                                            // disabled={!isOwner} // Allow non-owners
                                             className="text-[10px] font-bold text-slate-400 bg-transparent uppercase tracking-wider focus:outline-none cursor-pointer appearance-none disabled:opacity-60 disabled:cursor-not-allowed border-l border-white/10 pl-2"
                                             onClick={e => e.stopPropagation()}
                                             onMouseDown={e => e.stopPropagation()}
@@ -144,7 +144,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
                                         <select
                                             value={node.resolution || ''}
                                             onChange={(e) => onDataChange(node.id, { resolution: e.target.value || undefined })}
-                                            disabled={!isOwner}
+                                            // disabled={!isOwner} // Allow non-owners
                                             className="text-[10px] font-bold text-slate-400 bg-transparent uppercase tracking-wider focus:outline-none cursor-pointer appearance-none disabled:opacity-60 disabled:cursor-not-allowed border-l border-white/10 pl-2"
                                             onClick={e => e.stopPropagation()}
                                             onMouseDown={e => e.stopPropagation()}
@@ -162,11 +162,11 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
                                         <button
                                             onClick={(e) => {
                                                 e.stopPropagation();
-                                                if (!!isOwner) {
-                                                    onDataChange(node.id, { googleSearch: !node.googleSearch });
-                                                }
+                                                // if (!!isOwner) { // Allow non-owners
+                                                onDataChange(node.id, { googleSearch: !node.googleSearch });
+                                                // }
                                             }}
-                                            disabled={!isOwner}
+                                            // disabled={!isOwner} // Allow non-owners
                                             className={`ml-2 p-1 rounded-md transition-colors ${node.googleSearch ? 'bg-neon-blue/20 text-neon-blue' : 'text-slate-500 hover:text-slate-300'}`}
                                             title="Enable Google Search Grounding"
                                         >
@@ -182,7 +182,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
                                     <select
                                         value={currentModel}
                                         onChange={handleModelChange}
-                                        disabled={!isOwner}
+                                        // disabled={!isOwner} // Allow non-owners
                                         className="text-[10px] font-bold text-slate-400 bg-transparent uppercase tracking-wider focus:outline-none cursor-pointer appearance-none disabled:opacity-60 disabled:cursor-not-allowed"
                                         onClick={e => e.stopPropagation()}
                                         onMouseDown={e => e.stopPropagation()}
@@ -196,11 +196,11 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
                                         <button
                                             onClick={(e) => {
                                                 e.stopPropagation();
-                                                if (!!isOwner) {
-                                                    onDataChange(node.id, { googleSearch: !node.googleSearch });
-                                                }
+                                                // if (!!isOwner) { // Allow non-owners
+                                                onDataChange(node.id, { googleSearch: !node.googleSearch });
+                                                // }
                                             }}
-                                            disabled={!isOwner}
+                                            // disabled={!isOwner} // Allow non-owners
                                             className={`ml-2 p-1 rounded-md transition-colors ${node.googleSearch ? 'bg-neon-blue/20 text-neon-blue' : 'text-slate-500 hover:text-slate-300'}`}
                                             title="Enable Google Search Grounding"
                                         >

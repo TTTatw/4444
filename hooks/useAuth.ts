@@ -87,7 +87,7 @@ export const useAuth = () => {
                     if (role === 'admin') {
                         try {
                             const users = await fetchUsers();
-                            setAuthorizedUsers(users.map(u => ({ id: u.id, name: u.name, password: u.password, role: 'user' })));
+                            setAuthorizedUsers(users.map(u => ({ id: u.id, name: u.email || u.name || 'Unknown', password: u.password, role: 'user' })));
                         } catch (e) { console.error(e); }
                     }
                 }
@@ -146,7 +146,7 @@ export const useAuth = () => {
             setNewUserPassword('');
             // refresh list
             const remoteUsers = await fetchUsers();
-            setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.name, password: u.password, role: 'user' })));
+            setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.email || u.name || 'Unknown', password: u.password, role: 'user' })));
             return true;
         } catch (err) {
             alert('创建授权账号失败：' + (err as Error).message);
@@ -181,7 +181,7 @@ export const useAuth = () => {
             const target = authorizedUsers.find(u => u.name === name);
             if (target?.id) await deleteUser(target.id);
             const remoteUsers = await fetchUsers();
-            setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.email || u.name, password: u.password, role: 'user' })));
+            setAuthorizedUsers(remoteUsers.map(u => ({ id: u.id, name: u.email || u.name || 'Unknown', password: u.password, role: 'user' })));
         } catch (error) {
             console.error("Failed to delete user:", error);
         }

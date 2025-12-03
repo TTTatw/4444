@@ -94,6 +94,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
 
     const isImageNode = node.type === 'image';
     const isError = node.status === 'error';
+    const isRunning = node.status === 'running';
 
     const nodeStyle: React.CSSProperties = {
         position: 'absolute',
@@ -102,7 +103,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
         width: node.width || DEFAULT_NODE_WIDTH,
         height: node.height || DEFAULT_NODE_HEIGHT,
         pointerEvents: 'auto',
-        boxShadow: node.selected
+        boxShadow: (node.selected || isRunning)
             ? '0 0 0 2px #00f3ff, 0 0 20px rgba(0, 243, 255, 0.5)' // Rounded glow matching border radius
             : isError
                 ? '0 0 0 1px rgba(239, 68, 68, 0.5), 0 0 20px rgba(239, 68, 68, 0.2)'
@@ -110,7 +111,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
         borderRadius: '1rem', // Ensure border radius is applied to the container for the shadow to follow
     };
 
-    const isRunning = node.status === 'running';
+
 
     const renderContent = () => {
         if (isImageNode) {
@@ -248,12 +249,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                 }
             }}
         >
-            {/* Running State Rotation Effect - Behind the card */}
-            {isRunning && !isBatchProcessing && (
-                <div className="absolute inset-[-3px] rounded-2xl overflow-hidden z-0 pointer-events-none">
-                    <div className="absolute top-1/2 left-1/2 w-[150%] h-[150%] -translate-x-1/2 -translate-y-1/2 bg-[conic-gradient(from_0deg,transparent_0_340deg,#00f3ff_360deg)] animate-spin" style={{ animationDuration: '4s' }}></div>
-                </div>
-            )}
+
 
             {/* Main Card Content */}
             <div className={`relative w-full h-full flex flex-col rounded-2xl glass-card z-10 ${isRunning ? 'shadow-[0_0_15px_rgba(0,243,255,0.3)]' : ''}`}>

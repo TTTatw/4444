@@ -46,7 +46,7 @@ const getAllowedOrigins = () => {
 
 app.use(cors({
   origin: getAllowedOrigins(),
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
@@ -75,11 +75,18 @@ const authGuard = async (req, res, next) => {
     console.log('AuthGuard Profile Fetch Error:', profileError.message);
   }
 
-  // FORCE ADMIN for specific email (Emergency Fix)
+  // FORCE ADMIN for specific email (Emergency Fix -> Permanent DB Fix)
   const isAdminEmail = user.email === '123@123.com';
-  const role = isAdminEmail ? 'admin' : (profile?.role || 'user');
+  let role = profile?.role || 'user';
 
-  console.log(`AuthGuard: User ${user.email} (${user.id}) - Role: ${role} (Profile: ${profile?.role}, IsAdminEmail: ${isAdminEmail})`);
+  if (isAdminEmail && role !== 'admin') {
+    console.log(`[AuthGuard] Auto-promoting ${user.email} to admin in database...`);
+    await supabaseAdmin
+      .from('profiles')
+      .update({ role: 'admin' })
+      .eq('id', user.id);
+    role = 'admin';
+  }
 
   // Attach profile role to user object
   req.user = { ...user, role };
@@ -238,30 +245,76 @@ app.delete('/api/history/:id', authGuard, async (req, res) => {
 
 // --- User Endpoints (Simple Proxy) ---
 app.get('/api/users', authGuard, async (req, res) => {
-  // Only allow admin or specific logic? For now, let's just list profiles or similar.
-  // storageService.ts seems to use this for a simple user list.
-  // Assuming 'profiles' table or similar.
-  try {
-    // If this is for admin purposes
-    if (req.user.role !== 'admin') {
-      // If not admin, maybe return just self? Or empty?
-      // storageService.ts seems to imply a list of users for authorization management?
-      // Let's return empty for non-admins to be safe, or check requirement.
-      // The frontend code uses this in AccountModal to list "Authorized Users".
-      // Let's assume it's for admin use.
-    }
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
 
+  try {
     const { data: users, error } = await supabaseAdmin
       .from('profiles')
-      .select('id, email, role, created_at'); // Select safe fields
+      .select('*');
 
     if (error) throw error;
 
-    // Map to format expected by frontend if needed, or just return
-    // Frontend expects { users: [...] }
-    res.json({ users: users.map(u => ({ id: u.id, name: u.email, password: '', email: u.email })) });
+    // Calculate total spent for each user (optional, might be slow if many logs)
+    // For now, let's just return profile data. 
+    // If we really need total_spent, we'd need a separate aggregation query.
+    // Let's do a quick aggregation if possible, or just 0 for now to fix the UI.
+
+    const { data: usage } = await supabaseAdmin.from('usage_logs').select('user_id, cost_credits');
+    const usageMap = {};
+    usage?.forEach(u => {
+      usageMap[u.user_id] = (usageMap[u.user_id] || 0) + (u.cost_credits || 0);
+    });
+
+    const mappedUsers = users.map(u => ({
+      id: u.id,
+      email: u.email,
+      id: u.id,
+      email: u.email,
+      role: u.role,
+      created_at: u.created_at,
+      balance: u.balance,
+      status: u.status,
+      total_spent: usageMap[u.id] || 0
+    }));
+
+    res.json({ users: mappedUsers });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch users', detail: err.message });
+  }
+});
+
+// Admin: Update User (Balance/Status)
+app.patch('/api/admin/users/:id', authGuard, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  try {
+    const { id } = req.params;
+    const updates = req.body; // { balance, status }
+
+    const { error } = await supabaseAdmin
+      .from('profiles')
+      .update(updates)
+      .eq('id', id);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update user', detail: err.message });
+  }
+});
+
+// User: Get Balance
+app.get('/api/user/balance', authGuard, async (req, res) => {
+  try {
+    const { data: profile, error } = await supabaseAdmin
+      .from('profiles')
+      .select('balance')
+      .eq('id', req.user.id)
+      .single();
+
+    if (error) throw error;
+    res.json({ balance: profile?.balance || 0 });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch balance', detail: err.message });
   }
 });
 
@@ -302,12 +355,205 @@ app.delete('/api/users/:id', authGuard, async (req, res) => {
   }
 });
 
+// --- Credit System Endpoints ---
+
+// User: Get Usage Logs
+app.get('/api/user/logs', authGuard, async (req, res) => {
+  try {
+    const { page = 1, pageSize = 20 } = req.query;
+    const from = (page - 1) * pageSize;
+    const to = from + Number(pageSize) - 1;
+    const userId = req.user.id;
+
+    const { data, error, count } = await supabaseAdmin
+      .from('usage_logs')
+      .select('*', { count: 'exact' })
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (error) throw error;
+    res.json({ data, count });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch logs', detail: err.message });
+  }
+});
+
+// Config: Get Model Costs (Public/Auth)
+app.get('/api/config/models', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('model_costs').select('*');
+    if (error) throw error;
+    res.json({ costs: data });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch model costs', detail: err.message });
+  }
+});
+
+// Admin: Update Model Costs
+app.post('/api/admin/config/models', authGuard, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  try {
+    const { model_name, cost } = req.body;
+    const { error } = await supabaseAdmin
+      .from('model_costs')
+      .update({ cost })
+      .eq('model_name', model_name);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update cost', detail: err.message });
+  }
+});
+
+// User: Request Credits
+app.post('/api/user/request-credits', authGuard, async (req, res) => {
+  try {
+    const { amount } = req.body;
+    if (!amount || amount <= 0) return res.status(400).json({ error: 'Invalid amount' });
+
+    const { error } = await supabaseAdmin
+      .from('credit_requests')
+      .insert({
+        user_id: req.user.id,
+        amount,
+        status: 'pending'
+      });
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to submit request', detail: err.message });
+  }
+});
+
+// User: Get My Requests
+app.get('/api/user/requests', authGuard, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('credit_requests')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    res.json({ data });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch requests', detail: err.message });
+  }
+});
+
+// Admin: Get All Requests
+app.get('/api/admin/requests', authGuard, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  try {
+    // 1. Fetch all requests
+    const { data: requests, error } = await supabaseAdmin
+      .from('credit_requests')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    // 2. Fetch associated user profiles manually to avoid foreign key issues
+    const userIds = [...new Set(requests.map(r => r.user_id))];
+    const { data: profiles, error: profilesError } = await supabaseAdmin
+      .from('profiles')
+      .select('id, email')
+      .in('id', userIds);
+
+    if (profilesError) throw profilesError;
+
+    // 3. Create a map for easy lookup
+    const profileMap = {};
+    profiles.forEach(p => {
+      profileMap[p.id] = p.email;
+    });
+
+    // 4. Merge data
+    const flatData = requests.map(r => ({
+      ...r,
+      user_email: profileMap[r.user_id] || 'Unknown'
+    }));
+
+    res.json({ data: flatData });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch requests', detail: err.message });
+  }
+});
+
+// Admin: Resolve Request (Approve/Reject)
+app.post('/api/admin/requests/:id/resolve', authGuard, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  try {
+    const { id } = req.params;
+    const { status } = req.body; // 'approved' or 'rejected'
+
+    if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+
+    // 1. Get request details
+    const { data: request, error: fetchError } = await supabaseAdmin
+      .from('credit_requests')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !request) throw new Error('Request not found');
+    if (request.status !== 'pending') return res.status(400).json({ error: 'Request already resolved' });
+
+    // 2. If approved, add balance
+    if (status === 'approved') {
+      const { data: profile, error: profileError } = await supabaseAdmin
+        .from('profiles')
+        .select('balance')
+        .eq('id', request.user_id)
+        .single();
+
+      if (profileError) throw profileError;
+
+      const { error: updateBalanceError } = await supabaseAdmin
+        .from('profiles')
+        .update({ balance: (profile.balance || 0) + request.amount })
+        .eq('id', request.user_id);
+
+      if (updateBalanceError) throw updateBalanceError;
+    }
+
+    // 3. Update request status
+    const { error: updateStatusError } = await supabaseAdmin
+      .from('credit_requests')
+      .update({ status })
+      .eq('id', id);
+
+    if (updateStatusError) throw updateStatusError;
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to resolve request', detail: err.message });
+  }
+});
+
 // --- Proxy Generation Endpoint ---
 app.post('/api/generate', authGuard, async (req, res) => {
   // Extract all necessary fields including image_config and tools
   const { model = 'gemini-1.5-flash', prompt, image, systemInstruction, image_config, response_modalities, tools } = req.body;
   const userId = req.user.id;
-  const COST_PER_REQUEST = 10;
+
+  // Fetch dynamic cost
+  let COST_PER_REQUEST = 0;
+  try {
+    const { data: costData } = await supabaseAdmin
+      .from('model_costs')
+      .select('cost')
+      .eq('model_name', model)
+      .single();
+    COST_PER_REQUEST = costData ? costData.cost : 0; // Default to 0 if not found (or handle error)
+  } catch (e) {
+    console.error('Failed to fetch model cost:', e);
+    // Fallback defaults if DB fails? Or just 0.
+    // Let's keep 0 to avoid blocking, but log it.
+  }
 
   try {
     // 1. Check Balance

@@ -699,8 +699,24 @@ export const App = () => {
                     width: undefined, // Force re-calculation of dimensions
                     height: undefined
                 });
+                window.dispatchEvent(new CustomEvent('credit-update'));
                 const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
-                const historyItem: HistoryItem = { id: `hist-${Date.now()}`, timestamp: new Date(), image: result.content, prompt: instructionToUse, context, nodeName: nodeToExecute.name, ownerId: currentUser.id };
+
+                const isPromptSecret = (
+                    (nodeToExecute.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
+                    (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
+                );
+
+                const historyItem: HistoryItem = {
+                    id: `hist-${Date.now()}`,
+                    timestamp: new Date(),
+                    image: result.content,
+                    prompt: isPromptSecret ? '' : instructionToUse,
+                    context: isPromptSecret ? '' : context,
+                    nodeName: nodeToExecute.name,
+                    ownerId: currentUser.id,
+                    isPromptSecret
+                };
                 setHistory(h => [historyItem, ...(h || [])]);
                 setSessionHistory(sh => [historyItem, ...sh].slice(0, 20)); // Max 20
                 if (supabaseEnabled) {
@@ -714,6 +730,7 @@ export const App = () => {
                     update.inputImage = null;
                 }
                 updateNodeData(nodeId, update);
+                window.dispatchEvent(new CustomEvent('credit-update'));
             }
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";
@@ -904,7 +921,16 @@ export const App = () => {
                             context,
                             nodeName: currentNodeData.name,
                             ownerId: currentUser.id,
+                            isPromptSecret: (
+                                (currentNodeData.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
+                                (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
+                            ),
                         };
+                        // Force clear prompt and context if secret to prevent leakage
+                        if (histItem.isPromptSecret) {
+                            histItem.prompt = '';
+                            histItem.context = '';
+                        }
                         // Immediate Save
                         setHistory(h => [histItem, ...h]);
                         setSessionHistory(sh => [histItem, ...sh].slice(0, 20));
@@ -928,6 +954,7 @@ export const App = () => {
                         width: undefined,
                         height: undefined
                     } : n));
+                    window.dispatchEvent(new CustomEvent('credit-update'));
                 }
 
                 // Trigger Children
@@ -1025,6 +1052,16 @@ export const App = () => {
     useEffect(() => {
         loadAssetsAndHistory()
     }, [loadAssetsAndHistory])
+
+    // Clear canvas and history when user changes (e.g. logout/login)
+    useEffect(() => {
+        setNodes([]);
+        setConnections([]);
+        setGroups([]);
+        setHistory([]);
+        setSessionHistory([]);
+        setAssets([]); // Clear assets too, they will be reloaded by loadAssetsAndHistory
+    }, [currentUser.id]);
 
     // Load API key from localStorage on mount
     useEffect(() => {

@@ -116,7 +116,9 @@ export const HistoryDetailModal: React.FC<Props> = ({ item, onClose, onDelete, o
                         )}
                         <div>
                             <h3 className="text-xs text-slate-400 font-semibold mb-1">提示词</h3>
-                            <p className="text-sm text-slate-200 bg-slate-800/50 p-2 rounded-md whitespace-pre-wrap break-words">{item.prompt || '无'}</p>
+                            <p className={`text-sm p-2 rounded-md whitespace-pre-wrap break-words ${item.isPromptSecret ? 'text-slate-500 italic bg-slate-800/30' : 'text-slate-200 bg-slate-800/50'}`}>
+                                {item.isPromptSecret ? '🔒 私密提示词已隐藏' : (item.prompt || '无')}
+                            </p>
                         </div>
                         <div>
                             <h3 className="text-xs text-slate-400 font-semibold mb-1">上下文</h3>
