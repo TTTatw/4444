@@ -1669,7 +1669,7 @@ export const App = () => {
                         isGenerated={generatedNodeIds.has(node.id)}
                         onContextMenu={handleNodeContextMenu}
                         isBatchProcessing={isBatchProcessing}
-                        isOwner={!node.ownerId || node.ownerId === currentUser.id}
+                        isOwner={!node.ownerId || node.ownerId === currentUser.id || node.sourceVisibility === 'public'}
                     />
                 ))}
 
@@ -1678,7 +1678,7 @@ export const App = () => {
                         node={activeNode}
                         onDataChange={updateNodeData}
                         onExecute={(nodeId, instruction) => executeNode(nodeId, instruction)}
-                        isOwner={!activeNode.ownerId || activeNode.ownerId === currentUser.id}
+                        isOwner={!activeNode.ownerId || activeNode.ownerId === currentUser.id || activeNode.sourceVisibility === 'public'}
                     />
                 )}
             </div>
