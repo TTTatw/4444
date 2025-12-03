@@ -706,6 +706,13 @@ export const App = () => {
                     (nodeToExecute.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
                     (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
                 );
+                console.log('[PrivacyDebug] SingleNode:', {
+                    nodeId,
+                    sourceVisibility: nodeToExecute.sourceVisibility,
+                    groupVisibility: groups.find(g => g.nodeIds.includes(nodeId))?.visibility,
+                    userRole: currentUser.role,
+                    isPromptSecret
+                });
 
                 const historyItem: HistoryItem = {
                     id: `hist-${Date.now()}`,
@@ -926,6 +933,13 @@ export const App = () => {
                                 (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
                             ),
                         };
+                        console.log('[PrivacyDebug] GroupNode:', {
+                            nodeId,
+                            sourceVisibility: currentNodeData.sourceVisibility,
+                            groupVisibility: groups.find(g => g.nodeIds.includes(nodeId))?.visibility,
+                            userRole: currentUser.role,
+                            isPromptSecret: histItem.isPromptSecret
+                        });
                         // Force clear prompt and context if secret to prevent leakage
                         if (histItem.isPromptSecret) {
                             histItem.prompt = '';
