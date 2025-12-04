@@ -42,6 +42,7 @@ export const App = () => {
     const [sessionHistory, setSessionHistory] = useState<HistoryItem[]>([]);
     const [historyPage, setHistoryPage] = useState(1);
     const [historyLoading, setHistoryLoading] = useState(false);
+    const [hasMoreHistory, setHasMoreHistory] = useState(true);
     const [historyModalSelection, setHistoryModalSelection] = useState<Set<string>>(new Set());
     const [assets, setAssets] = useState<WorkflowAsset[]>([]);
     const [groupToSave, setGroupToSave] = useState<Group | null>(null);
@@ -109,24 +110,38 @@ export const App = () => {
 
 
 
+    const loadHistoryItems = useCallback(async (page: number) => {
+        if (!currentUser.id) return;
+        setHistoryLoading(true);
+        try {
+            const limit = 24;
+            const historyData = await fetchHistoryItems(page, limit);
+            if (historyData.length < limit) {
+                setHasMoreHistory(false);
+            } else {
+                setHasMoreHistory(true);
+            }
+
+            setHistory(prev => page === 1 ? historyData : [...prev, ...historyData]);
+            setHistoryPage(page);
+        } catch (e) {
+            console.error("Failed to load history", e);
+        } finally {
+            setHistoryLoading(false);
+        }
+    }, [currentUser.id]);
+
     // Load History from DB
     useEffect(() => {
-        const loadHistory = async () => {
-            if (!currentUser.id) return;
-            setHistoryLoading(true);
-            try {
-                // Load top 10 history items for the gallery to prevent timeout
-                // Load top 10 history items for the gallery to prevent timeout
-                const historyData = await fetchHistoryItems(1, 10);
-                setHistory(historyData);
-            } catch (e) {
-                console.error("Failed to load history", e);
-            } finally {
-                setHistoryLoading(false);
-            }
-        };
-        loadHistory();
-    }, [currentUser.id]);
+        loadHistoryItems(1);
+    }, [loadHistoryItems]);
+
+    // Auto-fill history if empty (e.g. after deletion)
+    useEffect(() => {
+        if (!historyLoading && hasMoreHistory && history.length === 0) {
+            loadHistoryItems(1);
+        }
+    }, [history.length, historyLoading, hasMoreHistory, loadHistoryItems]);
 
     const { pan, setPan, zoom, setZoom, zoomAroundPoint, screenToWorld, setContainerRef, setCanvasRef, container, canvas } = useCanvasInteraction();
 
@@ -660,8 +675,15 @@ export const App = () => {
 
         const inputConnections = connectionsRef.current.filter(c => c.to === nodeId);
         const inputNodes = nodesRef.current.filter(n => inputConnections.some(c => c.from === n.id));
-        // Sort inputs by X position (left to right)
-        inputNodes.sort((a, b) => a.position.x - b.position.x);
+        // Sort inputs by X position (left to right), then Y position (top to bottom)
+        inputNodes.sort((a, b) => {
+            const xDiff = a.position.x - b.position.x;
+            // If X is close enough (e.g. aligned vertically), sort by Y
+            if (Math.abs(xDiff) < 10) {
+                return a.position.y - b.position.y;
+            }
+            return xDiff;
+        });
 
         const inputs = inputNodes.map(n => ({ type: n.type, data: n.type === 'image' ? n.inputImage : n.content }));
 
@@ -706,13 +728,6 @@ export const App = () => {
                     (nodeToExecute.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
                     (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
                 );
-                console.log('[PrivacyDebug] SingleNode:', {
-                    nodeId,
-                    sourceVisibility: nodeToExecute.sourceVisibility,
-                    groupVisibility: groups.find(g => g.nodeIds.includes(nodeId))?.visibility,
-                    userRole: currentUser.role,
-                    isPromptSecret
-                });
 
                 const historyItem: HistoryItem = {
                     id: `hist-${Date.now()}`,
@@ -933,13 +948,6 @@ export const App = () => {
                                 (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
                             ),
                         };
-                        console.log('[PrivacyDebug] GroupNode:', {
-                            nodeId,
-                            sourceVisibility: currentNodeData.sourceVisibility,
-                            groupVisibility: groups.find(g => g.nodeIds.includes(nodeId))?.visibility,
-                            userRole: currentUser.role,
-                            isPromptSecret: histItem.isPromptSecret
-                        });
                         // Force clear prompt and context if secret to prevent leakage
                         if (histItem.isPromptSecret) {
                             histItem.prompt = '';
@@ -1745,6 +1753,13 @@ export const App = () => {
                                         删除选中
                                     </button>
                                     <button
+                                        onClick={() => setHistoryModalSelection(new Set())}
+                                        disabled={historyModalSelection.size === 0}
+                                        className={`px-3 py-1 rounded text-sm ${historyModalSelection.size === 0 ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-slate-600 text-white hover:bg-slate-500'}`}
+                                    >
+                                        清除选中
+                                    </button>
+                                    <button
                                         disabled={historyModalSelection.size === 0}
                                         onClick={async () => {
                                             const selectedItems = history.filter(h => historyModalSelection.has(h.id));
@@ -1791,57 +1806,55 @@ export const App = () => {
                                 </div>
                             </div>
                             <div
-                                className="overflow-y-auto custom-scrollbar grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3"
+                                className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4"
                                 onScroll={(e) => {
                                     const target = e.currentTarget;
-                                    if (target.scrollHeight - target.scrollTop <= target.clientHeight + 50 && !historyLoading && historyPage * 20 < history.length) {
-                                        setHistoryLoading(true);
-                                        setTimeout(() => {
-                                            setHistoryPage(p => p + 1);
-                                            setHistoryLoading(false);
-                                        }, 300);
+                                    if (target.scrollHeight - target.scrollTop <= target.clientHeight + 50 && !historyLoading && hasMoreHistory) {
+                                        loadHistoryItems(historyPage + 1);
                                     }
                                 }}
                             >
-                                {history.slice(0, historyPage * 20).map(item => (
-                                    <div
-                                        key={item.id}
-                                        className={`relative bg-slate-800/70 border ${historyModalSelection.has(item.id) ? 'border-sky-500' : 'border-slate-700'} rounded-lg overflow-hidden cursor-pointer`}
-                                        style={{ aspectRatio: '3/4' }}
-                                        onClick={(e) => {
-                                            if (e.ctrlKey || e.metaKey) {
-                                                e.preventDefault();
-                                                setHistoryModalSelection(prev => {
-                                                    const next = new Set(prev);
-                                                    if (next.has(item.id)) next.delete(item.id);
-                                                    else next.add(item.id);
-                                                    return next;
-                                                });
-                                            } else if (!(e.target as HTMLElement).closest('input[type="checkbox"]')) {
-                                                setSelectedHistoryItem(item);
-                                            }
-                                        }}
-                                    >
-                                        <div className="absolute top-2 left-2 z-10">
-                                            <input
-                                                type="checkbox"
-                                                checked={historyModalSelection.has(item.id)}
-                                                onChange={(e) => {
+                                <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                                    {history.map(item => (
+                                        <div
+                                            key={item.id}
+                                            className={`relative bg-slate-800/70 border ${historyModalSelection.has(item.id) ? 'border-sky-500' : 'border-slate-700'} rounded-lg overflow-hidden cursor-pointer`}
+                                            style={{ aspectRatio: '3/4' }}
+                                            onClick={(e) => {
+                                                if (e.ctrlKey || e.metaKey) {
+                                                    e.preventDefault();
                                                     setHistoryModalSelection(prev => {
                                                         const next = new Set(prev);
-                                                        if (e.target.checked) next.add(item.id); else next.delete(item.id);
+                                                        if (next.has(item.id)) next.delete(item.id);
+                                                        else next.add(item.id);
                                                         return next;
                                                     });
-                                                }}
-                                                className="w-5 h-5 cursor-pointer"
-                                                onClick={(e) => e.stopPropagation()}
-                                            />
+                                                } else if (!(e.target as HTMLElement).closest('input[type="checkbox"]')) {
+                                                    setSelectedHistoryItem(item);
+                                                }
+                                            }}
+                                        >
+                                            <div className="absolute top-2 left-2 z-10">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={historyModalSelection.has(item.id)}
+                                                    onChange={(e) => {
+                                                        setHistoryModalSelection(prev => {
+                                                            const next = new Set(prev);
+                                                            if (e.target.checked) next.add(item.id); else next.delete(item.id);
+                                                            return next;
+                                                        });
+                                                    }}
+                                                    className="w-5 h-5 cursor-pointer"
+                                                    onClick={(e) => e.stopPropagation()}
+                                                />
+                                            </div>
+                                            <img src={item.image?.trim().startsWith('http') ? item.image : `data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-full object-cover" />
                                         </div>
-                                        <img src={item.image?.trim().startsWith('http') ? item.image : `data:image/png;base64,${item.image}`} alt={item.nodeName} className="w-full h-full object-cover" />
-                                    </div>
-                                ))}
+                                    ))}
+                                </div>
                                 {historyLoading && (
-                                    <div className="col-span-full text-center py-4 text-slate-400">加载中...</div>
+                                    <div className="text-center py-4 text-slate-400">加载中...</div>
                                 )}
                             </div>
                         </div>
@@ -1875,7 +1888,7 @@ export const App = () => {
                 onLogout={handleLogout}
                 onLoad={addWorkflowToCanvas}
                 onOpenLibrary={() => setIsAssetLibraryOpen(true)}
-                onOpenHistory={() => setIsHistoryModalOpen(true)}
+                onOpenHistory={() => { setIsHistoryModalOpen(true); setHistoryModalSelection(new Set()); }}
                 onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
                 onOpenAuthModal={() => setIsAccountModalOpen(true)}
                 onOpenAdminDashboard={() => setIsAdminDashboardOpen(true)}

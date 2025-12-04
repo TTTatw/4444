@@ -190,7 +190,7 @@ export const runNode = async (
                 'Authorization': `Bearer ${token}`
             },
             body: JSON.stringify(payload)
-        }, 60000); // 60s timeout for generation
+        }, 180000); // 180s (3 minutes) timeout for generation
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
