@@ -309,11 +309,28 @@ app.get('/api/user/balance', authGuard, async (req, res) => {
       .from('profiles')
       .select('balance')
       .eq('id', req.user.id)
-      .single();
+      .maybeSingle(); // Use maybeSingle instead of single to avoid error on no rows
 
     if (error) throw error;
-    res.json({ balance: profile?.balance || 0 });
+
+    // If no profile exists, we can assume 0 balance (or create one lazily)
+    if (!profile) {
+      // Optional: Lazily create profile
+      // Fetch default credits
+      const { data: defaultCredit } = await supabaseAdmin
+        .from('model_costs')
+        .select('cost')
+        .eq('model_name', 'default_new_user_credits')
+        .maybeSingle();
+      const initialBalance = defaultCredit ? defaultCredit.cost : 2000;
+
+      await supabaseAdmin.from('profiles').insert([{ id: req.user.id, email: req.user.email, role: 'user', balance: initialBalance, status: 'active' }]);
+      return res.json({ balance: initialBalance });
+    }
+
+    res.json({ balance: profile.balance || 0 });
   } catch (err) {
+    console.error("Balance fetch error:", err);
     res.status(500).json({ error: 'Failed to fetch balance', detail: err.message });
   }
 });
@@ -336,7 +353,27 @@ app.post('/api/users', authGuard, async (req, res) => {
     if (error) throw error;
 
     // Profile creation should be handled by trigger, but we can ensure it exists
-    // ...
+    // Fetch default credits
+    const { data: defaultCredit } = await supabaseAdmin
+      .from('model_costs')
+      .select('cost')
+      .eq('model_name', 'default_new_user_credits')
+      .maybeSingle();
+    const initialBalance = defaultCredit ? defaultCredit.cost : 2000;
+
+    const { error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .insert([
+        { id: data.user.id, email: email, role: 'user', balance: initialBalance, status: 'active' }
+      ]);
+
+    if (profileError) {
+      // Ignore duplicate key error if trigger already created it
+      if (!profileError.message.includes('duplicate key')) {
+        console.warn("Manual profile creation failed:", profileError);
+      }
+    }
+
     res.json({ success: true, user: data.user });
   } catch (err) {
     res.status(500).json({ error: 'Failed to create user', detail: err.message });
@@ -805,6 +842,19 @@ app.post('/api/generate', authGuard, async (req, res) => {
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+const initDefaults = async () => {
+  try {
+    const { data } = await supabaseAdmin.from('model_costs').select('model_name').eq('model_name', 'default_new_user_credits').maybeSingle();
+    if (!data) {
+      await supabaseAdmin.from('model_costs').insert([{ model_name: 'default_new_user_credits', cost: 2000, type: 'system' }]);
+      console.log('Initialized default_new_user_credits to 2000');
+    }
+  } catch (e) {
+    console.error('Failed to init defaults:', e);
+  }
+};
+initDefaults();
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);

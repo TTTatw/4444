@@ -20,7 +20,7 @@ interface Props {
 const IconButton = ({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) => (
     <button
         onClick={onClick}
-        className="w-10 h-10 flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/10 text-slate-200 transition-all hover:scale-105 shadow-sm border border-white/10"
+        className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/10 text-slate-200 transition-all hover:scale-105 shadow-sm border border-white/10"
         title={title}
     >
         {children}
@@ -76,13 +76,13 @@ const CreditDisplay = ({ onClick }: { onClick: () => void }) => {
     return (
         <button
             onClick={onClick}
-            className="w-14 bg-white/5 backdrop-blur-md rounded-2xl px-2 py-3 shadow-2xl border border-white/10 flex flex-col items-center gap-1 animate-in fade-in duration-500 hover:bg-white/10 transition-colors cursor-pointer group"
+            className="w-12 bg-white/5 backdrop-blur-md rounded-2xl px-1.5 py-2 shadow-2xl border border-white/10 flex flex-col items-center gap-1 animate-in fade-in duration-500 hover:bg-white/10 transition-colors cursor-pointer group"
             title="View Credit History"
         >
             <div className="text-yellow-400 drop-shadow-[0_0_8px_rgba(250,204,21,0.5)] group-hover:scale-110 transition-transform">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
             </div>
-            <span className="text-[10px] font-bold text-white font-mono">{balance}</span>
+            <span className="text-[9px] font-bold text-white font-mono">{balance}</span>
         </button>
     );
 };
@@ -117,8 +117,8 @@ export const WorkflowToolbar: React.FC<Props> = ({ onLoad, onOpenLibrary, onOpen
     };
 
     const toolbar = (
-        <div className="fixed top-6 left-6 z-[10000] flex flex-col items-center gap-3 pointer-events-auto text-sm">
-            <div className="flex flex-col items-center gap-2 bg-white/5 backdrop-blur-md rounded-2xl px-2 py-3 shadow-2xl border border-white/10">
+        <div className="fixed top-6 left-6 z-[10000] flex flex-col items-center gap-2 pointer-events-auto text-sm">
+            <div className="flex flex-col items-center gap-1.5 bg-white/5 backdrop-blur-md rounded-2xl px-1.5 py-2 shadow-2xl border border-white/10">
                 <IconButton title="Login / Account" onClick={onOpenAuthModal}><UserIcon /></IconButton>
                 {currentUser.role === 'admin' && (
                     <>
@@ -134,13 +134,13 @@ export const WorkflowToolbar: React.FC<Props> = ({ onLoad, onOpenLibrary, onOpen
                 )}
             </div>
 
-            <div className="w-14 bg-white/5 backdrop-blur-md rounded-2xl px-2 py-3 shadow-2xl border border-white/10 flex flex-col items-center gap-2">
+            <div className="w-12 bg-white/5 backdrop-blur-md rounded-2xl px-1.5 py-2 shadow-2xl border border-white/10 flex flex-col items-center gap-1.5">
                 <button
-                    className="w-7 h-7 rounded-md bg-white/10 hover:bg-white/20 text-xs text-white"
+                    className="w-6 h-6 rounded-md bg-white/10 hover:bg-white/20 text-xs text-white relative z-10 cursor-pointer flex items-center justify-center"
                     onClick={() => onZoomChange(zoom + 0.1)}
                     title="Zoom In"
                 >+</button>
-                <div className="w-10">
+                <div className="w-8 relative z-0">
                     <input
                         type="range"
                         min={0.2}
@@ -148,15 +148,15 @@ export const WorkflowToolbar: React.FC<Props> = ({ onLoad, onOpenLibrary, onOpen
                         step={0.05}
                         value={zoom}
                         onChange={(e) => onZoomChange(parseFloat(e.target.value))}
-                        className="accent-sky-400 w-10"
+                        className="accent-sky-400 w-8 cursor-pointer"
                     />
                 </div>
                 <button
-                    className="w-7 h-7 rounded-md bg-white/10 hover:bg-white/20 text-xs text-white"
+                    className="w-6 h-6 rounded-md bg-white/10 hover:bg-white/20 text-xs text-white relative z-10 cursor-pointer flex items-center justify-center"
                     onClick={() => onZoomChange(zoom - 0.1)}
                     title="Zoom Out"
                 >-</button>
-                <span className="text-[11px] text-slate-200">{Math.round(zoom * 100)}%</span>
+                <span className="text-[10px] text-slate-200">{Math.round(zoom * 100)}%</span>
             </div>
 
             {currentUser.role !== 'guest' && <CreditDisplay onClick={() => setShowCreditModal(true)} />}

@@ -386,26 +386,71 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose, current
                             )}
 
                             {activeTab === 'settings' && (
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    {costs.map(cost => (
-                                        <div key={cost.model_name} className="bg-[#252526] p-6 rounded border border-[#333] flex justify-between items-center group hover:border-[#555] transition-all">
-                                            <div>
-                                                <h4 className="text-white font-medium text-sm mb-1">{cost.model_name}</h4>
-                                                <span className="text-xs text-[#888] uppercase tracking-wider bg-[#1e1e1e] px-2 py-1 rounded">{cost.type}</span>
-                                            </div>
-                                            <div className="flex items-center gap-4">
-                                                <div className="text-xl font-bold text-yellow-500 font-mono">
-                                                    {cost.cost} <span className="text-xs text-[#888] font-normal">积分</span>
+                                <div className="space-y-8">
+                                    {/* System Settings */}
+                                    <div>
+                                        <h3 className="text-white font-bold mb-4 text-lg flex items-center gap-2">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                                            系统设置
+                                        </h3>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            {costs.filter(c => c.type === 'system').map(cost => (
+                                                <div key={cost.model_name} className="bg-[#252526] p-6 rounded border border-[#333] flex justify-between items-center group hover:border-[#555] transition-all">
+                                                    <div>
+                                                        <h4 className="text-white font-medium text-sm mb-1">
+                                                            {cost.model_name === 'default_new_user_credits' ? '新用户默认积分' : cost.model_name}
+                                                        </h4>
+                                                        <span className="text-xs text-[#888] uppercase tracking-wider bg-[#1e1e1e] px-2 py-1 rounded">{cost.type}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-4">
+                                                        <div className="text-xl font-bold text-blue-500 font-mono">
+                                                            {cost.cost} <span className="text-xs text-[#888] font-normal">积分</span>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => { setEditingCost(cost); setEditCostValue(cost.cost); }}
+                                                            className="p-2 hover:bg-[#333] rounded text-[#888] hover:text-white transition-colors"
+                                                        >
+                                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                                                        </button>
+                                                    </div>
                                                 </div>
-                                                <button
-                                                    onClick={() => { setEditingCost(cost); setEditCostValue(cost.cost); }}
-                                                    className="p-2 hover:bg-[#333] rounded text-[#888] hover:text-white transition-colors"
-                                                >
-                                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
-                                                </button>
-                                            </div>
+                                            ))}
+                                            {costs.filter(c => c.type === 'system').length === 0 && (
+                                                <div className="col-span-2 text-center py-8 text-[#888] text-sm italic">
+                                                    暂无系统设置项 (请重启后端服务以初始化)
+                                                </div>
+                                            )}
                                         </div>
-                                    ))}
+                                    </div>
+
+                                    {/* Model Costs */}
+                                    <div>
+                                        <h3 className="text-white font-bold mb-4 text-lg flex items-center gap-2">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5" /><path d="M8.5 8.5v.01" /><path d="M16 15.5v.01" /><path d="M12 12v.01" /><path d="M8.5 15.5v.01" /><path d="M15.5 8.5v.01" /></svg>
+                                            模型费率
+                                        </h3>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            {costs.filter(c => c.type !== 'system').map(cost => (
+                                                <div key={cost.model_name} className="bg-[#252526] p-6 rounded border border-[#333] flex justify-between items-center group hover:border-[#555] transition-all">
+                                                    <div>
+                                                        <h4 className="text-white font-medium text-sm mb-1">{cost.model_name}</h4>
+                                                        <span className="text-xs text-[#888] uppercase tracking-wider bg-[#1e1e1e] px-2 py-1 rounded">{cost.type}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-4">
+                                                        <div className="text-xl font-bold text-yellow-500 font-mono">
+                                                            {cost.cost} <span className="text-xs text-[#888] font-normal">积分</span>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => { setEditingCost(cost); setEditCostValue(cost.cost); }}
+                                                            className="p-2 hover:bg-[#333] rounded text-[#888] hover:text-white transition-colors"
+                                                        >
+                                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
                                 </div>
                             )}
                         </>

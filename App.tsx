@@ -2040,7 +2040,7 @@ export const App = () => {
                                 <div className="flex items-center gap-2">
                                     <button
                                         onClick={() => {
-                                            const displayed = history.slice(0, historyPage * 20);
+                                            const displayed = history.slice(0, historyPage * 24);
                                             if (historyModalSelection.size === displayed.length) {
                                                 setHistoryModalSelection(new Set());
                                             } else {
@@ -2203,7 +2203,7 @@ export const App = () => {
                 onClearHistory={() => setSessionHistory([])}
                 onDeleteHistory={(id) => setSessionHistory(sh => sh.filter(item => item.id !== id))}
                 zoom={zoom}
-                onZoomChange={(z) => zoomAroundPoint(z)}
+                onZoomChange={(z) => setZoom(z)}
             />
 
             {

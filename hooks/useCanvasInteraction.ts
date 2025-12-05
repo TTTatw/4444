@@ -119,11 +119,13 @@ export const useCanvasInteraction = () => {
         setPan,
         zoom,
         setZoom,
-        zoomAroundPoint,
-        screenToWorld,
-        setContainerRef: setContainer,
-        setCanvasRef: setCanvas,
         container,
-        canvas
+        setContainer,
+        setContainerRef: setContainer, // Alias for App.tsx compatibility
+        canvas,
+        setCanvas,
+        setCanvasRef: setCanvas, // Alias for App.tsx compatibility
+        zoomAroundPoint,
+        screenToWorld
     };
 };
