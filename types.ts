@@ -2,13 +2,22 @@
 // FIX: Add React import to use React.ReactNode type.
 import React from 'react';
 
-export type NodeType = 'text' | 'image';
+export type NodeType = 'text' | 'image' | 'batch-image';
 export type NodeStatus = 'idle' | 'running' | 'success' | 'error';
 export type ModelType = 'gemini-2.5-flash' | 'gemini-2.5-flash-image' | 'imagen-4.0-generate-001' | 'gemini-3-pro-image-preview';
 
 export interface Point {
   x: number;
   y: number;
+}
+
+export type BatchMode = 'independent' | 'merged';
+
+export interface BatchItem {
+  id: string;
+  source: string; // base64
+  result?: string; // base64
+  status: NodeStatus;
 }
 
 export interface Node {
@@ -31,6 +40,10 @@ export interface Node {
   googleSearch?: boolean;
   ownerId?: string;
   sourceVisibility?: 'public' | 'private';
+
+  // Batch Node specific
+  batchMode?: BatchMode;
+  batchItems?: BatchItem[];
 }
 
 export interface Connection {
@@ -90,6 +103,8 @@ export interface SerializedNode {
   aspectRatio?: string;
   resolution?: string;
   googleSearch?: boolean;
+  batchMode?: BatchMode;
+  batchItems?: BatchItem[];
 }
 
 export interface SerializedConnection {

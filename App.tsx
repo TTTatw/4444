@@ -15,7 +15,7 @@ import { SaveAssetModal } from './components/SaveAssetModal';
 import { AssetLibrary } from './components/AssetLibrary';
 import { LoginPage } from './components/LoginPage';
 import { AdminDashboard } from './components/AdminDashboard';
-import type { Node, Connection as ConnectionType, Point, ContextMenu as ContextMenuType, Group, NodeType, HistoryItem, WorkflowAsset, SerializedNode, SerializedConnection, NodeStatus } from './types';
+import type { Node, Connection as ConnectionType, Point, ContextMenu as ContextMenuType, Group, NodeType, HistoryItem, WorkflowAsset, SerializedNode, SerializedConnection, NodeStatus, BatchItem } from './types';
 import { runNode } from './services/geminiService';
 import { isSupabaseConfigured, fetchAssets, upsertAsset, deleteAsset, fetchHistoryItems, insertHistoryItem, removeHistoryItem, clearHistoryItems, fetchUsers, upsertUser, deleteUser, supabaseAuth, uploadImage } from './services/storageService';
 import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH } from './constants';
@@ -82,6 +82,7 @@ export const App = () => {
     const [isSaveAssetModalOpen, setIsSaveAssetModalOpen] = useState(false);
     const [selectedHistoryItem, setSelectedHistoryItem] = useState<HistoryItem | null>(null);
     const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+    const [isBatchProcessing, setIsBatchProcessing] = useState(false);
 
     // Undo/Redo
     const [past, setPast] = useState<{ nodes: Node[]; connections: ConnectionType[]; groups: Group[] }[]>([]);
@@ -221,7 +222,7 @@ export const App = () => {
             inputImage: null,
             width: DEFAULT_NODE_WIDTH,
             height: DEFAULT_NODE_HEIGHT,
-            selectedModel: type === 'image' ? 'gemini-2.5-flash-image' : 'gemini-3-pro-preview',
+            selectedModel: (type === 'image' || type === 'batch-image') ? 'gemini-2.5-flash-image' : 'gemini-3-pro-preview',
         };
         setNodes(ns => [...ns, newNode]);
         return newNode;
@@ -299,6 +300,17 @@ export const App = () => {
                 const isGenerated = connectionsRef.current.some(c => c.to === id);
                 if (isGenerated && data.content === undefined) {
                     updatedNode.content = targetNode.type === 'image' ? '生成中...' : '';
+                }
+            }
+
+            // Auto-disconnect logic for Batch Node Mode Switch
+            if (targetNode.type === 'batch-image' && data.batchMode && data.batchMode !== targetNode.batchMode) {
+                if (data.batchMode === 'merged') {
+                    // Switching to Merged (Input/Source) -> Cannot have Inputs -> Disconnect Incoming
+                    setConnections(prev => prev.filter(c => c.to !== id));
+                } else {
+                    // Switching to Independent (Output/Sink) -> Cannot have Outputs -> Disconnect Outgoing
+                    setConnections(prev => prev.filter(c => c.from !== id));
                 }
             }
 
@@ -463,13 +475,11 @@ export const App = () => {
         if (interactionState.current.hasDragged) return;
 
         const isCanvasClick = (e.target as HTMLElement).closest('[data-id="canvas-bg"]');
-        if (!isCanvasClick) return;
-
         const position = { x: e.clientX, y: e.clientY };
         const canvasPosition = { x: (position.x - pan.x) / zoom, y: (position.y - pan.y) / zoom };
 
         const createAndClose = (type: NodeType) => {
-            createNode(type, canvasPosition, type === 'text' ? '文本节点' : '图片节点');
+            createNode(type, canvasPosition, type === 'text' ? '文本节点' : type === 'batch-image' ? '批量图片节点' : '图片节点');
             closeContextMenu();
         };
 
@@ -479,9 +489,11 @@ export const App = () => {
             options: [
                 { label: '文本节点', description: '处理文本输入', action: () => createAndClose('text'), icon: <TextIcon /> },
                 { label: '图片节点', description: '生成或显示图片', action: () => createAndClose('image'), icon: <ImageIcon /> },
+                { label: '批量图片节点', description: '批量处理或合并图片', action: () => createAndClose('batch-image'), icon: <ImageIcon /> },
             ]
         });
     };
+
     const handleNodeMouseDown = (nodeId: string, e: MouseEvent) => {
         if (document.activeElement && (document.activeElement as HTMLElement).blur) {
             const tagName = document.activeElement.tagName;
@@ -567,6 +579,8 @@ export const App = () => {
                 aspectRatio: node.aspectRatio,
                 resolution: node.resolution,
                 googleSearch: node.googleSearch,
+                batchMode: node.batchMode,
+                batchItems: node.batchItems,
             };
         }));
 
@@ -654,120 +668,12 @@ export const App = () => {
             groups.filter(g => groupIdsToUngroup.has(g.id)).flatMap(g => g.nodeIds)
         );
 
-        setNodes(ns => ns.map(n => nodeIdsInSelectedGroups.has(n.id) ? { ...n, groupId: undefined } : n));
+        // Remove groups
         setGroups(gs => gs.filter(g => !groupIdsToUngroup.has(g.id)));
+
+        // Update nodes to remove groupId
+        setNodes(ns => ns.map(n => nodeIdsInSelectedGroups.has(n.id) ? { ...n, groupId: undefined } : n));
     };
-
-    // Workflow Execution
-    const executeNode = async (nodeId: string, instructionFromInput?: string) => {
-        const nodeToExecute = nodesRef.current.find(n => n.id === nodeId);
-        if (!nodeToExecute || nodeToExecute.status === 'running') return;
-
-        updateNodeData(nodeId, { status: 'running' });
-
-        const incomingConnectionIds = new Set(connectionsRef.current.filter(c => c.to === nodeId).map(c => c.id));
-        // Additive update for active connections
-        setActiveConnectionIds(prev => {
-            const next = new Set(prev);
-            incomingConnectionIds.forEach(id => next.add(id));
-            return next;
-        });
-
-        const inputConnections = connectionsRef.current.filter(c => c.to === nodeId);
-        const inputNodes = nodesRef.current.filter(n => inputConnections.some(c => c.from === n.id));
-        // Sort inputs by X position (left to right), then Y position (top to bottom)
-        inputNodes.sort((a, b) => {
-            const xDiff = a.position.x - b.position.x;
-            // If X is close enough (e.g. aligned vertically), sort by Y
-            if (Math.abs(xDiff) < 10) {
-                return a.position.y - b.position.y;
-            }
-            return xDiff;
-        });
-
-        const inputs = inputNodes.map(n => ({ type: n.type, data: n.type === 'image' ? n.inputImage : n.content }));
-
-        // A node's own image should only be an input if it's a root node (no inputs),
-        // implying the image was user-uploaded for editing.
-        const isGenerated = connectionsRef.current.some(c => c.to === nodeId);
-        // We also strictly check status. If success, it's likely a previous generation, so ignore it unless user explicitly wants to re-gen.
-        const isPreviousOutput = nodeToExecute.status === 'success';
-        if (nodeToExecute.type === 'image' && nodeToExecute.inputImage && !isGenerated && !isPreviousOutput) {
-            inputs.push({ type: 'image', data: nodeToExecute.inputImage });
-        }
-
-        const instructionToUse = instructionFromInput !== undefined ? instructionFromInput : nodeToExecute.instruction;
-
-        try {
-            const result = await runNode(
-                instructionToUse,
-                nodeToExecute.type,
-                inputs,
-                nodeToExecute.selectedModel,
-                apiKey || undefined,
-                {
-                    aspectRatio: nodeToExecute.aspectRatio,
-                    resolution: nodeToExecute.resolution,
-                    googleSearch: nodeToExecute.googleSearch
-                }
-            );
-
-            if (result.type === 'image') {
-                // Reset dimensions for new generated image to trigger auto-sizing
-                updateNodeData(nodeId, {
-                    status: 'success',
-                    inputImage: result.content,
-                    content: 'Generated image',
-                    width: undefined, // Force re-calculation of dimensions
-                    height: undefined
-                });
-                window.dispatchEvent(new CustomEvent('credit-update'));
-                const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
-
-                const isPromptSecret = (
-                    (nodeToExecute.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
-                    (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
-                );
-
-                const historyItem: HistoryItem = {
-                    id: `hist-${Date.now()}`,
-                    timestamp: new Date(),
-                    image: result.content,
-                    prompt: isPromptSecret ? '' : instructionToUse,
-                    context: isPromptSecret ? '' : context,
-                    nodeName: nodeToExecute.name,
-                    ownerId: currentUser.id,
-                    isPromptSecret
-                };
-                setHistory(h => [historyItem, ...(h || [])]);
-                setSessionHistory(sh => [historyItem, ...sh].slice(0, 20)); // Max 20
-                if (supabaseEnabled) {
-                    insertHistoryItem(historyItem, currentUser.id).catch(err => console.error("Supabase history insert failed:", err));
-                }
-            } else {
-                const update: Partial<Node> = { status: 'success', content: result.content };
-                if (nodeToExecute.type === 'image') {
-                    // An image node returned text. This can happen if the model can't fulfill
-                    // the image edit request and provides a text explanation instead.
-                    update.inputImage = null;
-                }
-                updateNodeData(nodeId, update);
-                window.dispatchEvent(new CustomEvent('credit-update'));
-            }
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";
-            updateNodeData(nodeId, { status: 'error', content: errorMessage });
-        } finally {
-            // Subtractive update for active connections
-            setActiveConnectionIds(prev => {
-                const next = new Set(prev);
-                incomingConnectionIds.forEach(id => next.delete(id));
-                return next;
-            });
-        }
-    };
-
-    const [isBatchProcessing, setIsBatchProcessing] = useState(false);
 
     const runGroupWorkflow = async (groupId: string) => {
         const group = groups.find(g => g.id === groupId);
@@ -915,68 +821,199 @@ export const App = () => {
                         inputs.push({ type: 'image', data: currentNodeData.inputImage });
                     }
 
-                    const result = await runNode(
-                        currentNodeData.instruction,
-                        currentNodeData.type,
-                        inputs,
-                        currentNodeData.selectedModel,
-                        apiKey || undefined,
-                        {
-                            aspectRatio: currentNodeData.aspectRatio,
-                            resolution: currentNodeData.resolution,
-                            googleSearch: currentNodeData.googleSearch
-                        }
-                    );
+                    // FIX: Handle Batch Node Logic (Independent vs Merged)
+                    if (currentNodeData.type === 'batch-image') {
+                        const batchMode = currentNodeData.batchMode || 'independent';
 
-                    // Update Local Data
-                    const updatedNode = { ...currentNodeData };
-                    if (result.type === 'image') {
-                        updatedNode.inputImage = result.content;
-                        updatedNode.content = 'Generated image';
-                        // Store history item
-                        const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
-                        const histItem: HistoryItem = {
-                            id: `hist-${Date.now()}-${nodeId}`,
-                            timestamp: new Date(),
-                            image: result.content,
-                            prompt: currentNodeData.instruction,
-                            context,
-                            nodeName: currentNodeData.name,
-                            ownerId: currentUser.id,
-                            isPromptSecret: (
-                                (currentNodeData.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
-                                (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
-                            ),
-                        };
-                        // Force clear prompt and context if secret to prevent leakage
-                        if (histItem.isPromptSecret) {
-                            histItem.prompt = '';
-                            histItem.context = '';
+                        if (batchMode === 'merged') {
+                            // Merged Mode: Gather all items as inputs + other inputs -> Run Once -> One Result
+                            const batchInputs = (currentNodeData.batchItems || []).map(item => ({ type: 'image' as const, data: item.source }));
+                            const allInputs = [...inputs, ...batchInputs];
+
+                            const result = await runNode(
+                                currentNodeData.instruction || '',
+                                currentNodeData.type,
+                                allInputs,
+                                currentNodeData.selectedModel,
+                                apiKey || undefined,
+                                {
+                                    aspectRatio: currentNodeData.aspectRatio,
+                                    resolution: currentNodeData.resolution,
+                                    googleSearch: currentNodeData.googleSearch
+                                }
+                            );
+
+                            // Update Node
+                            if (result.type === 'image') {
+                                const newItem: BatchItem = {
+                                    id: `item-${Date.now()}-${Math.random()}`,
+                                    source: result.content,
+                                    status: 'success'
+                                };
+                                const currentItems = currentNodeData.batchItems || [];
+                                const updatedNode = { ...currentNodeData, status: 'success', batchItems: [...currentItems, newItem] };
+                                executionData.set(nodeId, updatedNode);
+                                setNodes(ns => ns.map(n => n.id === nodeId ? { ...n, ...updatedNode, width: undefined, height: undefined } : n));
+
+                                // History
+                                const context = allInputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
+                                const histItem: HistoryItem = {
+                                    id: `hist-${Date.now()}-${nodeId}`,
+                                    timestamp: new Date(),
+                                    image: result.content,
+                                    prompt: currentNodeData.instruction || '',
+                                    context,
+                                    nodeName: currentNodeData.name,
+                                    ownerId: currentUser.id,
+                                    isPromptSecret: (
+                                        (currentNodeData.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
+                                        (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
+                                    ),
+                                };
+                                if (histItem.isPromptSecret) { histItem.prompt = ''; histItem.context = ''; }
+                                setHistory(h => [histItem, ...h]);
+                                setSessionHistory(sh => [histItem, ...sh].slice(0, 24));
+                                if (supabaseEnabled) insertHistoryItem(histItem, currentUser.id).catch(console.error);
+                            }
+                        } else {
+                            // Independent Mode: Iterate items -> Run per item -> Update per item
+                            const items = currentNodeData.batchItems || [];
+                            if (items.length === 0) {
+                                // No items, just mark success
+                                executionData.set(nodeId, { ...currentNodeData, status: 'success' });
+                                setNodes(ns => ns.map(n => n.id === nodeId ? { ...n, status: 'success' } : n));
+                            } else {
+                                const newItems = [...items];
+                                // Mark all as running initially? Or incrementally? executeNode does it incrementally.
+                                // Let's do parallel execution for speed in group run.
+                                const promises = newItems.map(async (item, index) => {
+                                    // FORCE RE-RUN: Do not skip success items. User clicked Run, so we Run.
+                                    // if (item.status === 'success' && item.result) return; 
+
+                                    // Update status to running
+                                    newItems[index] = { ...item, status: 'running' };
+                                    // We can't easily update UI incrementally inside this map without causing re-renders loop or race conditions in setNodes if not careful.
+                                    // But we should try to show progress.
+                                    // For now, let's just run logic.
+
+                                    try {
+                                        const itemInputs = [...inputs, { type: 'image' as const, data: item.source }];
+                                        const result = await runNode(
+                                            currentNodeData.instruction || '',
+                                            currentNodeData.type,
+                                            itemInputs,
+                                            currentNodeData.selectedModel,
+                                            apiKey || undefined,
+                                            {
+                                                aspectRatio: currentNodeData.aspectRatio,
+                                                resolution: currentNodeData.resolution,
+                                                googleSearch: currentNodeData.googleSearch
+                                            }
+                                        );
+
+                                        newItems[index] = { ...item, status: 'success', result: result.content };
+
+                                        // History per item
+                                        if (result.type === 'image') {
+                                            const context = itemInputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
+                                            const histItem: HistoryItem = {
+                                                id: `hist-${Date.now()}-${nodeId}-${index}`,
+                                                timestamp: new Date(),
+                                                image: result.content,
+                                                prompt: currentNodeData.instruction || '',
+                                                context,
+                                                nodeName: `${currentNodeData.name} (Batch ${index + 1})`,
+                                                ownerId: currentUser.id,
+                                                isPromptSecret: (
+                                                    (currentNodeData.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
+                                                    (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
+                                                ),
+                                            };
+                                            if (histItem.isPromptSecret) { histItem.prompt = ''; histItem.context = ''; }
+                                            setHistory(h => [histItem, ...h]);
+                                            setSessionHistory(sh => [histItem, ...sh].slice(0, 24));
+                                            if (supabaseEnabled) insertHistoryItem(histItem, currentUser.id).catch(console.error);
+                                        }
+
+                                    } catch (e) {
+                                        newItems[index] = { ...item, status: 'error' };
+                                    }
+                                });
+
+                                await Promise.all(promises);
+
+                                const updatedNode = { ...currentNodeData, status: 'success', batchItems: newItems };
+                                executionData.set(nodeId, updatedNode);
+                                setNodes(ns => ns.map(n => n.id === nodeId ? { ...n, ...updatedNode, width: undefined, height: undefined } : n));
+                            }
                         }
-                        // Immediate Save
-                        setHistory(h => [histItem, ...h]);
-                        setSessionHistory(sh => [histItem, ...sh].slice(0, 20));
-                        if (supabaseEnabled) {
-                            insertHistoryItem(histItem, currentUser.id).catch(err => console.error("Supabase history insert failed:", err));
-                        }
+                        window.dispatchEvent(new CustomEvent('credit-update'));
+
                     } else {
-                        updatedNode.content = result.content;
-                        if (currentNodeData.type === 'image') {
-                            updatedNode.inputImage = null;
-                        }
-                    }
-                    updatedNode.status = 'success';
-                    executionData.set(nodeId, updatedNode);
+                        // Standard Node Logic (Text/Image)
+                        const result = await runNode(
+                            currentNodeData.instruction,
+                            currentNodeData.type,
+                            inputs,
+                            currentNodeData.selectedModel,
+                            apiKey || undefined,
+                            {
+                                aspectRatio: currentNodeData.aspectRatio,
+                                resolution: currentNodeData.resolution,
+                                googleSearch: currentNodeData.googleSearch
+                            }
+                        );
 
-                    // Update UI
-                    setNodes(ns => ns.map(n => n.id === nodeId ? {
-                        ...n,
-                        ...updatedNode,
-                        status: 'success',
-                        width: undefined,
-                        height: undefined
-                    } : n));
-                    window.dispatchEvent(new CustomEvent('credit-update'));
+                        // Update Local Data
+                        const updatedNode = { ...currentNodeData };
+                        if (result.type === 'image') {
+                            updatedNode.inputImage = result.content;
+                            updatedNode.content = 'Generated image';
+                            // Store history item
+                            const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
+                            const histItem: HistoryItem = {
+                                id: `hist-${Date.now()}-${nodeId}`,
+                                timestamp: new Date(),
+                                image: result.content,
+                                prompt: currentNodeData.instruction,
+                                context,
+                                nodeName: currentNodeData.name,
+                                ownerId: currentUser.id,
+                                isPromptSecret: (
+                                    (currentNodeData.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
+                                    (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
+                                ),
+                            };
+                            // Force clear prompt and context if secret to prevent leakage
+                            if (histItem.isPromptSecret) {
+                                histItem.prompt = '';
+                                histItem.context = '';
+                            }
+                            // Immediate Save
+                            setHistory(h => [histItem, ...h]);
+                            setSessionHistory(sh => [histItem, ...sh].slice(0, 24));
+                            if (supabaseEnabled) {
+                                insertHistoryItem(histItem, currentUser.id).catch(err => console.error("Supabase history insert failed:", err));
+                            }
+                        } else {
+                            updatedNode.content = result.content;
+                            if (currentNodeData.type === 'image') {
+                                updatedNode.inputImage = null;
+                            }
+                        }
+                        updatedNode.status = 'success';
+                        executionData.set(nodeId, updatedNode);
+
+                        // Update UI
+                        setNodes(ns => ns.map(n => n.id === nodeId ? {
+                            ...n,
+                            ...updatedNode,
+                            status: 'success',
+                            width: undefined,
+                            height: undefined
+                        } : n));
+                        window.dispatchEvent(new CustomEvent('credit-update'));
+                    }
                 }
 
                 // Trigger Children
@@ -1014,6 +1051,273 @@ export const App = () => {
         roots.forEach(n => triggerNode(n.id));
     };
 
+    const handleRetryItem = async (nodeId: string, itemId: string) => {
+        const node = nodes.find(n => n.id === nodeId);
+        if (!node || !node.batchItems) return;
+
+        const itemIndex = node.batchItems.findIndex(i => i.id === itemId);
+        if (itemIndex === -1) return;
+
+        // Reset item status
+        const newItems = [...node.batchItems];
+        newItems[itemIndex] = { ...newItems[itemIndex], status: 'running', result: undefined };
+        updateNodeData(nodeId, { batchItems: newItems });
+
+        try {
+            // Re-run logic similar to executeNode but specific to this item
+            // We need to gather inputs again.
+            const incomingConns = connections.filter(c => c.to === nodeId);
+            const inputNodes = incomingConns.map(c => nodes.find(n => n.id === c.from)).filter(n => n) as Node[];
+
+            // Logic depends on mode
+            const batchMode = node.batchMode || 'independent';
+            let inputs: { type: NodeType, data: any }[] = [];
+
+            if (batchMode === 'independent') {
+                // Independent Mode: Inputs + This Item
+                inputs = inputNodes.map(n => ({ type: n.type, data: n.type === 'image' ? n.inputImage : n.content }));
+                inputs.push({ type: 'image', data: newItems[itemIndex].source });
+            } else {
+                // Merged Mode: Inputs + All Items (This is tricky for single retry, usually merged runs all)
+                // If user retries a merged item, it implies re-running the WHOLE merge or just this item?
+                // Merged mode produces ONE result from MANY inputs. Retrying one item doesn't make sense unless it's an input item?
+                // But batchItems in merged mode are OUTPUTS (if generated) or INPUTS (if uploaded)?
+                // Wait, in merged mode, batchItems are INPUTS usually.
+                // But my executeNode logic for merged mode says:
+                // "For merged mode, add the result as a new item" -> So batchItems are outputs?
+                // No, "node.batchItems.forEach(item => inputs.push...)" -> They are inputs.
+                // AND "updateNodeData... batchItems: [...currentItems, newItem]" -> They are also outputs?
+                // This mixed usage is confusing.
+                // Let's assume for now retry is mostly for Independent mode where each item is a generation.
+                // For Merged mode, if it's a result item, maybe we just re-run the whole node?
+                // Let's stick to Independent mode logic for now as that's the main use case for "Retry Image".
+
+                // Fallback to independent logic for retry
+                inputs = inputNodes.map(n => ({ type: n.type, data: n.type === 'image' ? n.inputImage : n.content }));
+                inputs.push({ type: 'image', data: newItems[itemIndex].source });
+            }
+
+            const result = await runNode(
+                node.instruction || '',
+                node.type,
+                inputs,
+                node.selectedModel,
+                apiKey,
+                {
+                    aspectRatio: node.aspectRatio,
+                    resolution: node.resolution,
+                    googleSearch: node.googleSearch
+                }
+            );
+
+            // Update Item
+            const updatedItems = [...(nodes.find(n => n.id === nodeId)?.batchItems || [])];
+            const updatedIndex = updatedItems.findIndex(i => i.id === itemId);
+            if (updatedIndex !== -1) {
+                updatedItems[updatedIndex] = { ...updatedItems[updatedIndex], status: 'success', result: result.content };
+                updateNodeData(nodeId, { batchItems: updatedItems });
+
+                // Save History
+                if (result.type === 'image') {
+                    const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
+                    const histItem: HistoryItem = {
+                        id: `hist-${Date.now()}-${nodeId}-${itemId}`,
+                        timestamp: new Date(),
+                        image: result.content,
+                        prompt: node.instruction || '',
+                        context,
+                        nodeName: `${node.name} (Retry)`,
+                        ownerId: currentUser.id,
+                        isPromptSecret: false // Simplify for retry
+                    };
+                    setHistory(prev => [histItem, ...prev]);
+                    setSessionHistory(prev => [histItem, ...prev].slice(0, 24));
+                    if (supabaseEnabled) insertHistoryItem(histItem).catch(console.error);
+                }
+            }
+
+        } catch (error) {
+            const updatedItems = [...(nodes.find(n => n.id === nodeId)?.batchItems || [])];
+            const updatedIndex = updatedItems.findIndex(i => i.id === itemId);
+            if (updatedIndex !== -1) {
+                updatedItems[updatedIndex] = { ...updatedItems[updatedIndex], status: 'error' };
+                updateNodeData(nodeId, { batchItems: updatedItems });
+            }
+        }
+    };
+
+    const executeNode = async (nodeId: string, instruction?: string) => {
+        const node = nodes.find(n => n.id === nodeId);
+        if (!node) return;
+
+        // Update instruction if provided
+        if (instruction !== undefined) {
+            updateNodeData(nodeId, { instruction });
+        }
+
+        setNodes(ns => ns.map(n => n.id === nodeId ? { ...n, status: 'running' } : n));
+
+        // Highlight Connections
+        const incomingConns = connections.filter(c => c.to === nodeId);
+        const incomingIds = incomingConns.map(c => c.id);
+
+        if (incomingIds.length > 0) {
+            setActiveConnectionIds(prev => {
+                const next = new Set(prev);
+                incomingIds.forEach(id => next.add(id));
+                return next;
+            });
+        }
+
+        try {
+            if (node.type === 'batch-image') {
+                // Batch Logic
+                const batchMode = node.batchMode || 'independent';
+                const inputNodes = incomingConns.map(c => nodes.find(n => n.id === c.from)).filter(n => n) as Node[];
+
+                if (batchMode === 'merged') {
+                    const inputs = inputNodes.map(n => ({ type: n.type, data: n.type === 'image' ? n.inputImage : n.content }));
+                    if (node.batchItems) {
+                        node.batchItems.forEach(item => inputs.push({ type: 'image', data: item.source }));
+                    }
+
+                    const result = await runNode(node.instruction || '', node.type, inputs, node.selectedModel, apiKey);
+
+                    // For merged mode, add the result as a new item
+                    if (result.type === 'image') {
+                        const newItem: BatchItem = {
+                            id: `item-${Date.now()}-${Math.random()}`,
+                            source: result.content,
+                            status: 'success'
+                        };
+                        const currentItems = node.batchItems || [];
+                        updateNodeData(nodeId, {
+                            status: 'success',
+                            batchItems: [...currentItems, newItem]
+                        });
+
+                        // Save History for Merged Batch
+                        const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
+                        const histItem: HistoryItem = {
+                            id: `hist-${Date.now()}-${nodeId}`,
+                            timestamp: new Date(),
+                            image: result.content,
+                            prompt: node.instruction || '',
+                            context,
+                            nodeName: node.name,
+                            ownerId: currentUser.id,
+                            isPromptSecret: (
+                                (node.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
+                                (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
+                            ),
+                        };
+                        if (histItem.isPromptSecret) {
+                            histItem.prompt = '';
+                            histItem.context = '';
+                        }
+                        setHistory(prev => [histItem, ...prev]);
+                        if (supabaseEnabled) {
+                            insertHistoryItem(histItem).catch(console.error);
+                        }
+                        setSessionHistory(prev => [histItem, ...prev].slice(0, 24));
+
+                    } else {
+                        updateNodeData(nodeId, { status: 'success', content: result.content });
+                    }
+                } else {
+                    // Independent Mode
+                    if (!node.batchItems || node.batchItems.length === 0) {
+                        updateNodeData(nodeId, { status: 'success' });
+                        return;
+                    }
+
+                    const newItems = [...node.batchItems];
+
+                    const promises = newItems.map(async (item, index) => {
+                        // FORCE RE-RUN: Do not skip success items. User clicked Run, so we Run.
+                        // if (item.status === 'success' && item.result) return; // Skip already done
+
+                        // Update item status to running
+                        newItems[index] = { ...item, status: 'running' };
+                        updateNodeData(nodeId, { batchItems: [...newItems] });
+
+                        try {
+                            // FIX: Allow image inputs for independent mode (e.g. style reference)
+                            const inputs = inputNodes.map(n => ({ type: n.type, data: n.type === 'image' ? n.inputImage : n.content }));
+                            // Add THIS item as the MAIN image input (or additional input)
+                            inputs.push({ type: 'image', data: item.source });
+
+                            const result = await runNode(node.instruction || '', node.type, inputs, node.selectedModel, apiKey);
+                            newItems[index] = { ...item, status: 'success', result: result.content };
+
+                            // Save History for Independent Item
+                            if (result.type === 'image') {
+                                const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
+                                const histItem: HistoryItem = {
+                                    id: `hist-${Date.now()}-${nodeId}-${index}`,
+                                    timestamp: new Date(),
+                                    image: result.content,
+                                    prompt: node.instruction || '',
+                                    context,
+                                    nodeName: `${node.name} (Batch ${index + 1})`,
+                                    ownerId: currentUser.id,
+                                    isPromptSecret: (
+                                        (node.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
+                                        (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
+                                    ),
+                                };
+                                if (histItem.isPromptSecret) {
+                                    histItem.prompt = '';
+                                    histItem.context = '';
+                                }
+                                setHistory(prev => [histItem, ...prev]);
+                                if (supabaseEnabled) {
+                                    insertHistoryItem(histItem).catch(console.error);
+                                }
+                                setSessionHistory(prev => [histItem, ...prev].slice(0, 24));
+                            }
+
+                        } catch (e) {
+                            newItems[index] = { ...item, status: 'error' };
+                        }
+                        // Update state incrementally
+                        updateNodeData(nodeId, { batchItems: [...newItems] });
+                    });
+
+                    await Promise.all(promises);
+                    updateNodeData(nodeId, { status: 'success' });
+                }
+
+            } else {
+                // Normal Node Logic
+                const inputNodes = incomingConns.map(c => nodes.find(n => n.id === c.from)).filter(n => n) as Node[];
+                const inputs = inputNodes.map(n => ({ type: n.type, data: n.type === 'image' ? n.inputImage : n.content }));
+
+                const result = await runNode(node.instruction || '', node.type, inputs, node.selectedModel, apiKey);
+
+                if (result.type === 'image') {
+                    updateNodeData(nodeId, { status: 'success', inputImage: result.content, content: 'Generated' });
+                } else {
+                    updateNodeData(nodeId, { status: 'success', content: result.content });
+                }
+            }
+        } catch (error) {
+            updateNodeData(nodeId, { status: 'error', content: error instanceof Error ? error.message : 'Error' });
+        } finally {
+            // Remove connection highlight
+            if (incomingIds.length > 0) {
+                // Keep it for a moment to show completion
+                setTimeout(() => {
+                    setActiveConnectionIds(prev => {
+                        const next = new Set(prev);
+                        incomingIds.forEach(id => next.delete(id));
+                        return next;
+                    });
+                }, 500);
+            }
+        }
+    };
+
     // Asset Management + History bootstrap
     const defaultAsset: WorkflowAsset = useMemo(() => ({
         id: 'asset-default-multimodal-1',
@@ -1030,7 +1334,7 @@ export const App = () => {
             { fromNode: 'default-image-1', toNode: 'default-image-2' },
             { fromNode: 'default-text-1', toNode: 'default-image-2' }
         ],
-    }), [])
+    }), []);
 
     const loadAssetsAndHistory = useCallback(async () => {
         // 未登录（guest）且启用了 Supabase 时，不要去请求远端，避免 401/403
@@ -1572,6 +1876,8 @@ export const App = () => {
 
 
 
+
+
     if (authLoading) {
         return (
             <div className="w-screen h-screen bg-[#0f1118] flex items-center justify-center text-slate-200">
@@ -1664,7 +1970,6 @@ export const App = () => {
                         isSaveDisabled={group.visibility === 'private' && group.ownerId !== undefined && group.ownerId !== currentUser.id && currentUser.role !== 'admin'}
                     />
                 ))}
-
                 {nodes.map(node => (
                     <NodeComponent
                         key={node.id} node={node}
@@ -1678,6 +1983,7 @@ export const App = () => {
                         onContextMenu={handleNodeContextMenu}
                         isBatchProcessing={isBatchProcessing}
                         isOwner={!node.ownerId || node.ownerId === currentUser.id || node.sourceVisibility === 'public'}
+                        onRetryItem={handleRetryItem}
                     />
                 ))}
 

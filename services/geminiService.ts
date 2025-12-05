@@ -155,9 +155,9 @@ export const runNode = async (
         };
 
         // Add Image Config & Response Modalities
-        if (nodeType === 'image' || options?.aspectRatio || options?.resolution) {
-            // Force image modality for image nodes
-            if (nodeType === 'image') {
+        if (nodeType === 'image' || nodeType === 'batch-image' || options?.aspectRatio || options?.resolution) {
+            // Force image modality for image nodes AND batch-image nodes
+            if (nodeType === 'image' || nodeType === 'batch-image') {
                 payload.response_modalities = ['Image'];
                 delete payload.systemInstruction;
             }
@@ -206,7 +206,7 @@ export const runNode = async (
         const data = await response.json();
 
         // 4. Handle Response
-        if (nodeType === 'image') {
+        if (nodeType === 'image' || nodeType === 'batch-image') {
             if (data.image) {
                 return { type: 'image', content: data.image };
             }

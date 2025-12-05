@@ -1,8 +1,8 @@
-
 import React, { useState, useRef, MouseEvent, ChangeEvent, useEffect } from 'react';
 import type { Node, NodeType } from '../types';
 import { fileToBase64 } from '../services/geminiService';
 import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH, MAX_NODE_HEIGHT, MAX_NODE_WIDTH } from '../constants';
+import { BatchNodeComponent } from './BatchNodeComponent';
 
 interface NodeProps {
     node: Node;
@@ -16,11 +16,12 @@ interface NodeProps {
     onContextMenu?: (nodeId: string, e: React.MouseEvent) => void;
     isBatchProcessing?: boolean;
     isOwner?: boolean;
+    onRetryItem?: (nodeId: string, itemId: string) => void;
 }
 
 const UploadIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>);
 
-export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChange, onConnectorMouseDown, onConnectorMouseUp, onMouseDown, onHeaderMouseDown, onViewContent, isGenerated, onContextMenu, isBatchProcessing = false, isOwner = true }) => {
+export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChange, onConnectorMouseDown, onConnectorMouseUp, onMouseDown, onHeaderMouseDown, onViewContent, isGenerated, onContextMenu, isBatchProcessing = false, isOwner = true, onRetryItem }) => {
     const [isNameEditing, setIsNameEditing] = useState(false);
     const [isContentEditing, setIsContentEditing] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -75,24 +76,78 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
     };
 
     const handlePaste = async (e: React.ClipboardEvent) => {
-        // if (!isOwner || node.type !== 'image' || isGenerated) return; // Allow non-owners to paste
-        if (node.type !== 'image' || isGenerated) return;
-        for (const item of e.clipboardData.items) {
-            if (item.type.startsWith('image/')) {
-                const file = item.getAsFile();
-                if (file) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const base64 = await fileToBase64(file);
-                    // IMPORTANT: Reset status to 'idle' so the runner knows this is fresh user input.
-                    onDataChange(node.id, { inputImage: base64, content: "pasted_image", status: 'idle', width: undefined, height: undefined });
-                    break; // Stop after finding the first image
+        // if (!isOwner || isGenerated) return; // Allow non-owners to paste
+        // if (!isOwner || isGenerated) return; // Allow non-owners to paste
+        if (isGenerated && node.type !== 'batch-image') return;
+
+        // Handle Image Node Paste
+        if (node.type === 'image') {
+            for (const item of e.clipboardData.items) {
+                if (item.type.startsWith('image/')) {
+                    const file = item.getAsFile();
+                    if (file) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const base64 = await fileToBase64(file);
+                        // IMPORTANT: Reset status to 'idle' so the runner knows this is fresh user input.
+                        onDataChange(node.id, { inputImage: base64, content: "pasted_image", status: 'idle', width: undefined, height: undefined });
+                        break; // Stop after finding the first image
+                    }
                 }
+            }
+        }
+        // Handle Batch Image Node Paste
+        else if (node.type === 'batch-image') {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const newItems: any[] = [];
+
+            // Priority 1: Check for Files (better for multi-select copy/paste)
+            if (e.clipboardData.files && e.clipboardData.files.length > 0) {
+                const files = Array.from(e.clipboardData.files);
+                for (const file of files) {
+                    if (file.type.startsWith('image/')) {
+                        const base64 = await fileToBase64(file);
+                        newItems.push({
+                            id: `item-${Date.now()}-${Math.random()}`,
+                            source: base64,
+                            status: 'idle'
+                        });
+                    }
+                }
+            }
+            // Priority 2: Check for Items (fallback for some contexts)
+            else {
+                const items = Array.from(e.clipboardData.items);
+                for (const item of items) {
+                    if (item.type.startsWith('image/')) {
+                        const file = item.getAsFile();
+                        if (file) {
+                            const base64 = await fileToBase64(file);
+                            newItems.push({
+                                id: `item-${Date.now()}-${Math.random()}`,
+                                source: base64,
+                                status: 'idle'
+                            });
+                        }
+                    }
+                }
+            }
+
+            if (newItems.length > 0) {
+                const currentItems = node.batchItems || [];
+                if (currentItems.length + newItems.length > 9) {
+                    alert('最多只能添加 9 张图片');
+                    return;
+                }
+                onDataChange(node.id, { batchItems: [...currentItems, ...newItems] });
             }
         }
     };
 
     const isImageNode = node.type === 'image';
+    const isBatchNode = node.type === 'batch-image';
     const isError = node.status === 'error';
     const isRunning = node.status === 'running';
 
@@ -102,20 +157,24 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
         top: node.position.y,
         width: node.width || DEFAULT_NODE_WIDTH,
         height: node.height || DEFAULT_NODE_HEIGHT,
-        pointerEvents: 'auto',
-        boxShadow: (node.selected || isRunning)
-            ? '0 0 0 2px #00f3ff, 0 0 20px rgba(0, 243, 255, 0.5)' // Rounded glow matching border radius
-            : isError
-                ? '0 0 0 1px rgba(239, 68, 68, 0.5), 0 0 20px rgba(239, 68, 68, 0.2)'
-                : '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-        borderRadius: '1rem', // Ensure border radius is applied to the container for the shadow to follow
+        zIndex: node.selected ? 1000 : 1,
     };
 
-
-
     const renderContent = () => {
+        if (isBatchNode) {
+            return (
+                <BatchNodeComponent
+                    node={node}
+                    onDataChange={onDataChange}
+                    isOwner={isOwner}
+                    onRetryItem={onRetryItem}
+                    onViewContent={onViewContent}
+                />
+            );
+        }
+
         if (isImageNode) {
-            // Case 1: Has an image to display
+            // Case 1: Has image (input or output)
             if (node.inputImage) {
                 const imgSrc = node.inputImage.startsWith('http')
                     ? node.inputImage
@@ -234,16 +293,22 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
             id={node.id}
             style={nodeStyle}
             tabIndex={-1} // Allow div to receive focus for paste events
-            className={`group/node absolute outline-none`}
+            className={`group/node absolute outline-none pointer-events-auto`}
             onMouseDown={(e) => {
                 const target = e.target as HTMLElement;
+                // Only focus if not clicking an input/textarea to avoid stealing focus
                 if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') {
-                    e.currentTarget.focus(); // Manually focus on click to enable paste on div
+                    e.currentTarget.focus();
                 }
                 onMouseDown(node.id, e);
             }}
+            // Add onFocus to ensure we know when it's ready for paste
+            onFocus={(e) => {
+                // Optional: visual feedback or state tracking if needed
+            }}
             onPaste={handlePaste}
             onContextMenu={(e) => {
+                e.stopPropagation(); // Stop bubbling to prevent canvas context menu
                 if (onContextMenu) {
                     onContextMenu(node.id, e);
                 }
@@ -252,10 +317,14 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
 
 
             {/* Main Card Content */}
-            <div className={`relative w-full h-full flex flex-col rounded-2xl glass-card z-10 ${isRunning ? 'shadow-[0_0_15px_rgba(0,243,255,0.3)]' : ''}`}>
+            <div className={`relative w-full h-full flex flex-col rounded-2xl glass-card z-10 transition-all duration-200 ${node.selected ? 'ring-1 ring-neon-blue shadow-[0_0_20px_rgba(0,243,255,0.3)]' : ''} ${isRunning ? 'ring-1 ring-neon-blue shadow-[0_0_20px_rgba(0,243,255,0.5)]' : ''}`}>
                 <div
                     className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-full flex items-center justify-center"
-                    onMouseDown={(e) => onHeaderMouseDown(node.id, e)}
+                    onMouseDown={(e) => {
+                        // Ensure focus when clicking header, as the handler might stop propagation
+                        (e.currentTarget.closest('[tabindex]') as HTMLElement)?.focus();
+                        onHeaderMouseDown(node.id, e);
+                    }}
                     onDoubleClick={(e) => { e.stopPropagation(); setIsNameEditing(true); }}
                 >
                     <div className="relative flex justify-center min-w-[100px]">
@@ -271,7 +340,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                             />
                         ) : (
                             <h3
-                                className={`font-bold text-xs text-slate-300 select-none truncate text-center px-3 py-1.5 rounded-lg bg-black/40 backdrop-blur-md border border-white/5 group-hover/node:border-white/20 transition-all cursor-move shadow-lg flex items-center gap-1 justify-center`}
+                                className={`font-bold text-xs text-slate-300 select-none truncate text-center px-3 py-1.5 rounded-lg bg-black/40 backdrop-blur-md border border-white/5 transition-all cursor-move shadow-lg flex items-center gap-1 justify-center`}
                             >
                                 {node.name}
                             </h3>
@@ -294,33 +363,37 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                     )}
                 </div>
 
-                {/* Input Connector */}
-                <div
-                    className="absolute left-[-6px] top-1/2 -translate-y-1/2 w-3 h-6 bg-slate-700 rounded-r-none rounded-l-sm cursor-pointer flex items-center justify-center transition-all z-10
-                            hover:scale-125 hover:bg-neon-blue hover:shadow-[0_0_10px_rgba(0,243,255,0.5)]
-                            group-hover/node:opacity-100 opacity-0"
-                    style={{ left: -12, width: 12, height: 24, borderRadius: '4px 0 0 4px' }}
-                    title="Input"
-                    data-connector="true"
-                    onMouseDown={(e) => { e.stopPropagation(); onConnectorMouseDown(e, node.id, 'input'); }}
-                    onMouseUp={(e) => { e.stopPropagation(); onConnectorMouseUp(node.id, 'input'); }}
-                >
-                    <div className="w-1 h-3 bg-black/30 rounded-full"></div>
-                </div>
+                {/* Input Connector (Left) - Hidden for Merged Mode */}
+                {(!isBatchNode || (node.batchMode || 'independent') !== 'merged') && (
+                    <div
+                        className={`absolute left-[-6px] top-1/2 -translate-y-1/2 w-3 h-6 bg-slate-700 rounded-r-none rounded-l-sm cursor-pointer flex items-center justify-center transition-all z-10
+                                hover:scale-125 hover:bg-neon-blue hover:shadow-[0_0_10px_rgba(0,243,255,0.5)]
+                                group-hover/node:opacity-100 opacity-0`}
+                        style={{ left: -12, width: 12, height: 24, borderRadius: '4px 0 0 4px' }}
+                        title="Input"
+                        data-connector="true"
+                        onMouseDown={(e) => { e.stopPropagation(); onConnectorMouseDown(e, node.id, 'input'); }}
+                        onMouseUp={(e) => { e.stopPropagation(); onConnectorMouseUp(node.id, 'input'); }}
+                    >
+                        <div className="w-1 h-3 bg-black/30 rounded-full"></div>
+                    </div>
+                )}
 
-                {/* Output Connector */}
-                <div
-                    className="absolute right-[-6px] top-1/2 -translate-y-1/2 w-3 h-6 bg-slate-700 rounded-l-none rounded-r-sm cursor-pointer flex items-center justify-center transition-all z-10
-                            hover:scale-125 hover:bg-neon-purple hover:shadow-[0_0_10px_rgba(188,19,254,0.5)]
-                            group-hover/node:opacity-100 opacity-0"
-                    style={{ right: -12, width: 12, height: 24, borderRadius: '0 4px 4px 0' }}
-                    title="Output"
-                    data-connector="true"
-                    onMouseDown={(e) => { e.stopPropagation(); onConnectorMouseDown(e, node.id, 'output'); }}
-                    onMouseUp={(e) => { e.stopPropagation(); onConnectorMouseUp(node.id, 'output'); }}
-                >
-                    <div className="w-1 h-3 bg-black/30 rounded-full"></div>
-                </div>
+                {/* Output Connector (Right) - Hidden for Independent Mode */}
+                {(!isBatchNode || (node.batchMode || 'independent') !== 'independent') && (
+                    <div
+                        className={`absolute right-[-6px] top-1/2 -translate-y-1/2 w-3 h-6 bg-slate-700 rounded-l-none rounded-r-sm cursor-pointer flex items-center justify-center transition-all z-10
+                                hover:scale-125 hover:bg-neon-purple hover:shadow-[0_0_10px_rgba(188,19,254,0.5)]
+                                group-hover/node:opacity-100 opacity-0`}
+                        style={{ right: -12, width: 12, height: 24, borderRadius: '0 4px 4px 0' }}
+                        title="Output"
+                        data-connector="true"
+                        onMouseDown={(e) => { e.stopPropagation(); onConnectorMouseDown(e, node.id, 'output'); }}
+                        onMouseUp={(e) => { e.stopPropagation(); onConnectorMouseUp(node.id, 'output'); }}
+                    >
+                        <div className="w-1 h-3 bg-black/30 rounded-full"></div>
+                    </div>
+                )}
 
                 {/* Hidden file input for image nodes that are user-editable */}
                 {isImageNode && !isGenerated && (

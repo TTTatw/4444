@@ -56,19 +56,41 @@ export const useConnection = ({
     const onConnectorMouseUp = useCallback((nodeId: string | null, type: 'input' | 'output') => {
         if (!drawingConnection) return;
 
-        const fromNode = drawingConnection.from || (type === 'output' ? nodeId : undefined);
-        const toNode = drawingConnection.to || (type === 'input' ? nodeId : undefined);
+        const fromNodeId = drawingConnection.from || (type === 'output' ? nodeId : undefined);
+        const toNodeId = drawingConnection.to || (type === 'input' ? nodeId : undefined);
 
-        if (fromNode && toNode && fromNode !== toNode) {
-            const alreadyExists = connections.some(c => c.from === fromNode && c.to === toNode);
-            if (!alreadyExists) {
-                recordHistory();
-                setConnections(cs => [...cs, { id: `${fromNode}-${toNode}`, from: fromNode, to: toNode }]);
+        if (fromNodeId && toNodeId && fromNodeId !== toNodeId) {
+            // Validation Rules
+            const sourceNode = nodes.find(n => n.id === fromNodeId);
+            const targetNode = nodes.find(n => n.id === toNodeId);
+
+            if (sourceNode && targetNode) {
+                // Rule 1: Independent Batch Node cannot have outputs
+                if (sourceNode.type === 'batch-image' && (sourceNode.batchMode || 'independent') !== 'merged') {
+                    alert('输出模式下的批量节点无法作为输出源');
+                    setDrawingConnection(null);
+                    setPreviewConnection(null);
+                    return;
+                }
+
+                // Rule 2: Merged Batch Node cannot have inputs
+                if (targetNode.type === 'batch-image' && targetNode.batchMode === 'merged') {
+                    alert('输入模式下的批量节点无法接收输入');
+                    setDrawingConnection(null);
+                    setPreviewConnection(null);
+                    return;
+                }
+
+                const alreadyExists = connections.some(c => c.from === fromNodeId && c.to === toNodeId);
+                if (!alreadyExists) {
+                    recordHistory();
+                    setConnections(cs => [...cs, { id: `${fromNodeId}-${toNodeId}`, from: fromNodeId, to: toNodeId }]);
+                }
             }
         }
         setDrawingConnection(null);
         setPreviewConnection(null);
-    }, [drawingConnection, connections, setConnections, recordHistory]);
+    }, [drawingConnection, connections, setConnections, recordHistory, nodes]);
 
     const handleDragConnection = useCallback((e: globalThis.MouseEvent) => {
         if (!drawingConnection) return;
@@ -100,6 +122,27 @@ export const useConnection = ({
 
     const onConnectionDrop = useCallback((e: globalThis.MouseEvent) => {
         if (!drawingConnection) return;
+
+        // Check source constraints before showing menu
+        if (drawingConnection.from) {
+            const sourceNode = nodes.find(n => n.id === drawingConnection.from);
+            if (sourceNode && sourceNode.type === 'batch-image' && (sourceNode.batchMode || 'independent') !== 'merged') {
+                alert('独立模式下的批量节点无法作为输出源');
+                setDrawingConnection(null);
+                setPreviewConnection(null);
+                return;
+            }
+        }
+        // Check target constraints (if dragging from input connector)
+        if (drawingConnection.to) {
+            const targetNode = nodes.find(n => n.id === drawingConnection.to);
+            if (targetNode && targetNode.type === 'batch-image' && targetNode.batchMode === 'merged') {
+                alert('合并模式下的批量节点无法接收输入');
+                setDrawingConnection(null);
+                setPreviewConnection(null);
+                return;
+            }
+        }
 
         const dropPos = {
             x: (e.clientX - pan.x) / zoom,
@@ -141,7 +184,7 @@ export const useConnection = ({
                 }
             ]
         });
-    }, [drawingConnection, pan, zoom, onCreateNode, onOpenContextMenu, onCloseContextMenu, setConnections]);
+    }, [drawingConnection, pan, zoom, onCreateNode, onOpenContextMenu, onCloseContextMenu, setConnections, nodes]);
 
     return {
         drawingConnection,
