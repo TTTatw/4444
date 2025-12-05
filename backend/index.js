@@ -152,7 +152,8 @@ app.get('/api/admin/logs', authGuard, async (req, res) => {
 // --- History Endpoints ---
 app.get('/api/history', authGuard, async (req, res) => {
   try {
-    const { page = 1, limit = 20 } = req.query;
+    const { page = 1, limit = 30 } = req.query;
+    console.log(`[API] History Request: page=${page}, limit=${limit}, userId=${req.user.id}`);
     const from = (page - 1) * limit;
     const to = from + Number(limit) - 1;
     const userId = req.user.id;
