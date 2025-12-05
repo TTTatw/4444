@@ -1367,7 +1367,7 @@ export const App = () => {
         const canUseSupabase = supabaseEnabled && currentUser.role !== 'guest';
         if (canUseSupabase) {
             try {
-                const [remoteAssets, remoteHistory] = await Promise.all([fetchAssets(), fetchHistoryItems()]);
+                const [remoteAssets, remoteHistory] = await Promise.all([fetchAssets(), fetchHistoryItems(1, 30)]);
                 const normalizedAssets = (remoteAssets || []).map(a => ({ ...a, visibility: a.visibility || 'public' as const }));
                 if (normalizedAssets.length > 0) {
                     setAssets(normalizedAssets);

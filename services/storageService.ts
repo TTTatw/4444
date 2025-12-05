@@ -172,6 +172,7 @@ export const fetchHistoryItems = async (page: number = 1, pageSize: number = 20)
 
     const session = await supabase?.auth.getSession();
     const token = session?.data.session?.access_token;
+
     if (apiBase && token) {
         const res = await fetch(`${apiBase}/api/history?page=${page}&limit=${pageSize}`, {
             headers: { Authorization: `Bearer ${token}` }
@@ -191,6 +192,8 @@ export const fetchHistoryItems = async (page: number = 1, pageSize: number = 20)
         }));
     }
     if (!supabase) return [];
+
+
 
     const { data, error } = await supabase
         .from(HISTORY_TABLE)
