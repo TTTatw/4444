@@ -82,6 +82,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
 
         // Handle Image Node Paste
         if (node.type === 'image') {
+            let handled = false;
             for (const item of e.clipboardData.items) {
                 if (item.type.startsWith('image/')) {
                     const file = item.getAsFile();
@@ -91,8 +92,17 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                         const base64 = await fileToBase64(file);
                         // IMPORTANT: Reset status to 'idle' so the runner knows this is fresh user input.
                         onDataChange(node.id, { inputImage: base64, content: "pasted_image", status: 'idle', width: undefined, height: undefined });
+                        handled = true;
                         break; // Stop after finding the first image
                     }
+                }
+            }
+            if (!handled) {
+                const text = e.clipboardData.getData('text');
+                if (text && (text.startsWith('http') || text.startsWith('data:image'))) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onDataChange(node.id, { inputImage: text, content: "pasted_url", status: 'idle', width: undefined, height: undefined });
                 }
             }
         }
@@ -231,7 +241,21 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                                 e.stopPropagation();
                                 fileInputRef.current?.click();
                             }}
-                            onMouseDown={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => {
+                                // Do NOT stop propagation so the parent can focus
+                                // Or manually focus:
+                                // (e.currentTarget.closest('[tabindex]') as HTMLElement)?.focus();
+                                // Actually, letting it bubble to parent onMouseDown is better.
+                                // But parent onMouseDown calls onMouseDown prop which selects the node.
+                                // If we stop prop, we must handle selection/focus here.
+                                const nodeEl = document.getElementById(node.id);
+                                nodeEl?.focus();
+                                // We still stop prop to prevent dragging? No, onMouseDown usually starts drag.
+                                // If we want to allow drag, we shouldn't stop prop.
+                                // But this is a button-like element.
+                                e.stopPropagation();
+                                onMouseDown(node.id, e); // Select node
+                            }}
                         >
                             上传/粘贴
                         </p>

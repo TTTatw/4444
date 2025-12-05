@@ -115,7 +115,7 @@ export const App = () => {
         if (!currentUser.id) return;
         setHistoryLoading(true);
         try {
-            const limit = 24;
+            const limit = 30;
             const historyData = await fetchHistoryItems(page, limit);
             if (historyData.length < limit) {
                 setHasMoreHistory(false);
@@ -2040,7 +2040,7 @@ export const App = () => {
                                 <div className="flex items-center gap-2">
                                     <button
                                         onClick={() => {
-                                            const displayed = history.slice(0, historyPage * 24);
+                                            const displayed = history.slice(0, historyPage * 30);
                                             if (historyModalSelection.size === displayed.length) {
                                                 setHistoryModalSelection(new Set());
                                             } else {
@@ -2053,7 +2053,12 @@ export const App = () => {
                                     </button>
                                     <button
                                         disabled={historyModalSelection.size === 0}
-                                        onClick={() => handleBulkDeleteHistory(Array.from(historyModalSelection))}
+                                        onClick={async () => {
+                                            await handleBulkDeleteHistory(Array.from(historyModalSelection));
+                                            // Remove deleted items from state without reloading to preserve scroll position
+                                            setHistory(prev => prev.filter(h => !historyModalSelection.has(h.id)));
+                                            setHistoryModalSelection(new Set());
+                                        }}
                                         className={`px-3 py-1 rounded text-sm ${historyModalSelection.size === 0 ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-500'}`}
                                     >
                                         删除选中
