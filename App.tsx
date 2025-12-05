@@ -1297,6 +1297,32 @@ export const App = () => {
 
                 if (result.type === 'image') {
                     updateNodeData(nodeId, { status: 'success', inputImage: result.content, content: 'Generated' });
+
+                    // Save History for Single Node Execution
+                    const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
+                    const histItem: HistoryItem = {
+                        id: `hist-${Date.now()}-${nodeId}`,
+                        timestamp: new Date(),
+                        image: result.content,
+                        prompt: node.instruction || '',
+                        context,
+                        nodeName: node.name,
+                        ownerId: currentUser.id,
+                        isPromptSecret: (
+                            (node.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
+                            (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
+                        ),
+                    };
+                    if (histItem.isPromptSecret) {
+                        histItem.prompt = '';
+                        histItem.context = '';
+                    }
+                    setHistory(prev => [histItem, ...prev]);
+                    if (supabaseEnabled) {
+                        insertHistoryItem(histItem).catch(console.error);
+                    }
+                    setSessionHistory(prev => [histItem, ...prev].slice(0, 24));
+
                 } else {
                     updateNodeData(nodeId, { status: 'success', content: result.content });
                 }
