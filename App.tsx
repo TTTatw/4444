@@ -1293,6 +1293,11 @@ export const App = () => {
                 const inputNodes = incomingConns.map(c => nodes.find(n => n.id === c.from)).filter(n => n) as Node[];
                 const inputs = inputNodes.map(n => ({ type: n.type, data: n.type === 'image' ? n.inputImage : n.content }));
 
+                // Fix: Include the node's own input image (if uploaded/existing) as context for Image-to-Image
+                if (node.inputImage) {
+                    inputs.push({ type: 'image', data: node.inputImage });
+                }
+
                 const result = await runNode(node.instruction || '', node.type, inputs, node.selectedModel, apiKey);
 
                 if (result.type === 'image') {
