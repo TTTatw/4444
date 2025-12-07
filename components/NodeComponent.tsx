@@ -71,7 +71,8 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
         if (file) {
             const base64 = await fileToBase64(file);
             // IMPORTANT: Reset status to 'idle' so the runner knows this is fresh user input, not stale output.
-            onDataChange(node.id, { inputImage: base64, content: file.name, status: 'idle', width: undefined, height: undefined });
+            // When uploading new input, clear previous outputImage
+            onDataChange(node.id, { inputImage: base64, outputImage: undefined, content: file.name, status: 'idle', width: undefined, height: undefined });
         }
     };
 
@@ -91,7 +92,8 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                         e.stopPropagation();
                         const base64 = await fileToBase64(file);
                         // IMPORTANT: Reset status to 'idle' so the runner knows this is fresh user input.
-                        onDataChange(node.id, { inputImage: base64, content: "pasted_image", status: 'idle', width: undefined, height: undefined });
+                        // When pasting new input, clear previous outputImage
+                        onDataChange(node.id, { inputImage: base64, outputImage: undefined, content: "pasted_image", status: 'idle', width: undefined, height: undefined });
                         handled = true;
                         break; // Stop after finding the first image
                     }
@@ -185,10 +187,12 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
 
         if (isImageNode) {
             // Case 1: Has image (input or output)
-            if (node.inputImage) {
-                const imgSrc = node.inputImage.startsWith('http')
-                    ? node.inputImage
-                    : `data:image/png;base64,${node.inputImage}`;
+            const displayImage = node.outputImage || node.inputImage;
+
+            if (displayImage) {
+                const imgSrc = displayImage.startsWith('http')
+                    ? displayImage
+                    : `data:image/png;base64,${displayImage}`;
                 return (
                     <div className="relative h-full w-full group/image-content rounded-xl overflow-hidden">
                         <div className="h-full w-full flex items-center justify-center bg-black/20">
@@ -198,7 +202,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
                                 className="max-h-full max-w-full object-contain"
                                 onDoubleClick={(e) => {
                                     e.stopPropagation();
-                                    onViewContent(node.type, node.inputImage!, node.name);
+                                    onViewContent(node.type, displayImage!, node.name);
                                 }}
                             />
                         </div>

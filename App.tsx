@@ -1291,17 +1291,34 @@ export const App = () => {
             } else {
                 // Normal Node Logic
                 const inputNodes = incomingConns.map(c => nodes.find(n => n.id === c.from)).filter(n => n) as Node[];
-                const inputs = inputNodes.map(n => ({ type: n.type, data: n.type === 'image' ? n.inputImage : n.content }));
+                const inputs = inputNodes.map(n => ({
+                    type: n.type,
+                    // Downstream: Prefer outputImage (result) if available, otherwise inputImage (source)
+                    data: n.type === 'image' ? (n.outputImage || n.inputImage) : n.content
+                }));
 
                 // Fix: Include the node's own input image (if uploaded/existing) as context for Image-to-Image
-                if (node.inputImage) {
+                // CRITIAL: Only use inputImage (Source). NEVER use outputImage (Result) for self-reference.
+                // This prevents the feedback loop where the generated image becomes the input for the next run.
+                // Also, if upstream inputs exist, implies this node is a processor, so we might want to ignore self input?
+                // User requirement: "If no dependency input, uploaded image is initial reference... generated image NOT input for next... if dependency, generated is passed".
+                // Logic:
+                // 1. Upstream inputs -> Use them.
+                // 2. No Upstream inputs -> Use node.inputImage (Source).
+                // 3. Result -> Save to node.outputImage.
+                if (inputs.length === 0 && node.inputImage) {
                     inputs.push({ type: 'image', data: node.inputImage });
+                } else if (inputs.length > 0 && node.inputImage) {
+                    // Logic check: If I have upstream inputs, do I still attach my own image?
+                    // User says: "If dependency inputs... definitely reference upstream instead of self".
+                    // So we do NOT push node.inputImage here.
                 }
 
-                const result = await runNode(node.instruction || '', node.type, inputs, node.selectedModel, apiKey);
+                const result = await runNode(node.instruction || '', node.type, inputs, node.selectedModel, apiKey, { resolution: node.resolution, aspectRatio: node.aspectRatio });
 
                 if (result.type === 'image') {
-                    updateNodeData(nodeId, { status: 'success', inputImage: result.content, content: 'Generated' });
+                    // Save result to outputImage, NOT inputImage
+                    updateNodeData(nodeId, { status: 'success', outputImage: result.content, content: 'Generated' });
 
                     // Save History for Single Node Execution
                     const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');

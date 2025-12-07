@@ -29,7 +29,8 @@ export interface Node {
   instruction: string;
   status: NodeStatus;
   selected: boolean;
-  inputImage: string | null; // base64 string
+  inputImage: string | null; // base64 string (user upload or upstream input)
+  outputImage?: string | null; // base64 string (generated result)
   groupId?: string;
   width?: number;
   height?: number;
@@ -97,6 +98,7 @@ export interface SerializedNode {
   content: string;
   instruction: string;
   inputImage: string | null;
+  outputImage?: string | null; // Add outputImage to serialization
   width?: number;
   height?: number;
   selectedModel?: string;
