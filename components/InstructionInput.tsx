@@ -1,6 +1,7 @@
 import React, { useState, ChangeEvent, useEffect, useRef } from 'react';
 import type { Node } from '../types';
 import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH } from '../constants';
+import { fileToBase64 } from '../services/geminiService';
 
 interface InstructionInputProps {
     node: Node;
@@ -58,6 +59,30 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
         }
     };
 
+    const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        if (!isOwner) return;
+        const items = Array.from(e.clipboardData.items);
+        for (const item of items) {
+            if (item.type.startsWith('image/')) {
+                const file = item.getAsFile();
+                if (file) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const base64 = await fileToBase64(file);
+                    // Update inputImage and reset status to idle
+                    // Also clear outputImage to avoid confusion
+                    onDataChange(node.id, {
+                        inputImage: base64,
+                        outputImage: undefined,
+                        status: 'idle',
+                        content: node.type === 'image' ? file.name : node.content // For image node, use filename as content if needed
+                    });
+                    return;
+                }
+            }
+        }
+    };
+
     const nodeHeight = node.height || DEFAULT_NODE_HEIGHT;
     const nodeWidth = node.width || DEFAULT_NODE_WIDTH;
 
@@ -87,6 +112,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
                         value={!isOwner ? '' : instruction}
                         onChange={handleInstructionChange}
                         onKeyDown={handleKeyDown}
+                        onPaste={handlePaste}
                         readOnly={!isOwner}
                         className={`w-full bg-transparent text-slate-200 p-3 text-sm resize-none focus:outline-none placeholder:text-slate-600 max-h-40 custom-scrollbar font-mono leading-relaxed ${!isOwner ? 'cursor-not-allowed text-slate-500' : ''}`}
                         rows={1}
