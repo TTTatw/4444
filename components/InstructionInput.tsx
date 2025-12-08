@@ -72,6 +72,31 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
             return;
         }
 
+        // Handle Batch Image Node
+        if (node.type === 'batch-image') {
+            const newItems: any[] = [];
+            for (const result of results) {
+                if (result.type === 'image') {
+                    newItems.push({
+                        id: `item-${Date.now()}-${Math.random()}`,
+                        source: result.content,
+                        status: 'idle'
+                    });
+                }
+            }
+
+            if (newItems.length > 0) {
+                const currentItems = node.batchItems || [];
+                if (currentItems.length + newItems.length > 9) {
+                    alert('最多只能添加 9 张图片');
+                    return;
+                }
+                onDataChange(node.id, { batchItems: [...currentItems, ...newItems] });
+            }
+            return;
+        }
+
+        // Handle Single Image Node
         const firstImage = results.find(r => r.type === 'image');
         if (firstImage) {
             // Update inputImage and reset status to idle

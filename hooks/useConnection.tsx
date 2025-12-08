@@ -181,6 +181,20 @@ export const useConnection = ({
                         }
                         onCloseContextMenu();
                     }
+                },
+                {
+                    label: '批量图片节点',
+                    icon: <ImageIcon />,
+                    description: '批量处理或合并图片',
+                    action: () => {
+                        const newNode = onCreateNode('batch-image', dropPos, '批量图片节点');
+                        if (connectionSource.from) {
+                            setConnections(prev => [...prev, { id: `${connectionSource.from}-${newNode.id}`, from: connectionSource.from!, to: newNode.id }]);
+                        } else if (connectionSource.to) {
+                            setConnections(prev => [...prev, { id: `${newNode.id}-${connectionSource.to}`, from: newNode.id, to: connectionSource.to! }]);
+                        }
+                        onCloseContextMenu();
+                    }
                 }
             ]
         });

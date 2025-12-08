@@ -26,6 +26,7 @@ import { useCanvasInteraction } from './hooks/useCanvasInteraction';
 import { useAuth } from './hooks/useAuth';
 import { TextIcon, ImageIcon } from './components/Icons';
 import { sortNodesSpatially } from './utils/nodeUtils';
+import { collectSortedInputs, createHistoryItem, runSingleBatchItem } from './utils/executionUtils';
 
 
 
@@ -804,23 +805,14 @@ export const App = () => {
                 } else {
                     // Prepare inputs from executionData
                     // Since executionData now has all nodes, this works for external dependencies too.
-                    const inputNodesData = incomingConns
+                    const incomingNodesData = incomingConns
                         .map(c => executionData.get(c.from))
                         .filter(n => n !== undefined) as Node[];
 
-                    // Sort inputs by X position (left to right)
-                    inputNodesData.sort((a, b) => a.position.x - b.position.x);
-
-                    const inputs = inputNodesData.map(n => ({
-                        type: n.type,
-                        data: n.type === 'image' ? n.inputImage : n.content
-                    }));
-
-                    // Self-image input (if it's a root node effectively for this operation or purely editing)
-                    // If hasInputs is false, it's a root. If it has inputs, we generally don't use its own image unless specifically handled?
-                    if (currentNodeData.type === 'image' && currentNodeData.inputImage && !hasInputs) {
-                        inputs.push({ type: 'image', data: currentNodeData.inputImage });
-                    }
+                    // Abstracted Input Collection
+                    // This fixes the spatial sorting bug (was X-only, now Top/Left via sortNodesSpatially)
+                    // And fixes the upstream data bug (now uses outputImage if available)
+                    const inputs = collectSortedInputs(incomingNodesData, currentNodeData, sortNodesSpatially);
 
                     // FIX: Handle Batch Node Logic (Independent vs Merged)
                     if (currentNodeData.type === 'batch-image') {
@@ -856,22 +848,17 @@ export const App = () => {
                                 executionData.set(nodeId, updatedNode);
                                 setNodes(ns => ns.map(n => n.id === nodeId ? { ...n, ...updatedNode, width: undefined, height: undefined } : n));
 
-                                // History
-                                const context = allInputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
-                                const histItem: HistoryItem = {
-                                    id: `hist-${Date.now()}-${nodeId}`,
-                                    timestamp: new Date(),
-                                    image: result.content,
-                                    prompt: currentNodeData.instruction || '',
-                                    context,
-                                    nodeName: currentNodeData.name,
-                                    ownerId: currentUser.id,
-                                    isPromptSecret: (
-                                        (currentNodeData.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
-                                        (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
-                                    ),
-                                };
-                                if (histItem.isPromptSecret) { histItem.prompt = ''; histItem.context = ''; }
+                                // History using Helper
+                                const histItem = createHistoryItem(
+                                    nodeId,
+                                    currentNodeData.name,
+                                    currentNodeData.instruction || '',
+                                    allInputs,
+                                    result.content,
+                                    currentUser,
+                                    groups,
+                                    currentNodeData.sourceVisibility
+                                );
                                 setHistory(h => [histItem, ...h]);
                                 setSessionHistory(sh => [histItem, ...sh].slice(0, 24));
                                 if (supabaseEnabled) insertHistoryItem(histItem, currentUser.id).catch(console.error);
@@ -898,44 +885,35 @@ export const App = () => {
                                     // For now, let's just run logic.
 
                                     try {
-                                        const itemInputs = [...inputs, { type: 'image' as const, data: item.source }];
-                                        const result = await runNode(
+                                        const { status, result } = await runSingleBatchItem(
+                                            item,
+                                            inputs,
                                             currentNodeData.instruction || '',
-                                            currentNodeData.type,
-                                            itemInputs,
+                                            currentNodeData.type as 'image' | 'batch-image',
                                             currentNodeData.selectedModel,
-                                            apiKey || undefined,
-                                            {
-                                                aspectRatio: currentNodeData.aspectRatio,
-                                                resolution: currentNodeData.resolution,
-                                                googleSearch: currentNodeData.googleSearch
-                                            }
+                                            apiKey,
+                                            { resolution: currentNodeData.resolution, aspectRatio: currentNodeData.aspectRatio, googleSearch: currentNodeData.googleSearch }
                                         );
 
-                                        newItems[index] = { ...item, status: 'success', result: result.content };
+                                        newItems[index] = { ...item, status, result };
 
-                                        // History per item
-                                        if (result.type === 'image') {
-                                            const context = itemInputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
-                                            const histItem: HistoryItem = {
-                                                id: `hist-${Date.now()}-${nodeId}-${index}`,
-                                                timestamp: new Date(),
-                                                image: result.content,
-                                                prompt: currentNodeData.instruction || '',
-                                                context,
-                                                nodeName: `${currentNodeData.name} (Batch ${index + 1})`,
-                                                ownerId: currentUser.id,
-                                                isPromptSecret: (
-                                                    (currentNodeData.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
-                                                    (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
-                                                ),
-                                            };
-                                            if (histItem.isPromptSecret) { histItem.prompt = ''; histItem.context = ''; }
+                                        if (status === 'success' && result) {
+                                            // History per item
+                                            const itemInputs = [...inputs, { type: 'image' as const, data: item.source }];
+                                            const histItem = createHistoryItem(
+                                                `${nodeId}-${index}`,
+                                                `${currentNodeData.name} (Batch ${index + 1})`,
+                                                currentNodeData.instruction || '',
+                                                itemInputs,
+                                                result,
+                                                currentUser,
+                                                groups,
+                                                currentNodeData.sourceVisibility
+                                            );
                                             setHistory(h => [histItem, ...h]);
                                             setSessionHistory(sh => [histItem, ...sh].slice(0, 24));
                                             if (supabaseEnabled) insertHistoryItem(histItem, currentUser.id).catch(console.error);
                                         }
-
                                     } catch (e) {
                                         newItems[index] = { ...item, status: 'error' };
                                     }
@@ -968,28 +946,21 @@ export const App = () => {
                         // Update Local Data
                         const updatedNode = { ...currentNodeData };
                         if (result.type === 'image') {
-                            updatedNode.inputImage = result.content;
+                            updatedNode.outputImage = result.content;
+                            updatedNode.inputImage = undefined;
                             updatedNode.content = 'Generated image';
-                            // Store history item
-                            const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
-                            const histItem: HistoryItem = {
-                                id: `hist-${Date.now()}-${nodeId}`,
-                                timestamp: new Date(),
-                                image: result.content,
-                                prompt: currentNodeData.instruction,
-                                context,
-                                nodeName: currentNodeData.name,
-                                ownerId: currentUser.id,
-                                isPromptSecret: (
-                                    (currentNodeData.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
-                                    (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
-                                ),
-                            };
-                            // Force clear prompt and context if secret to prevent leakage
-                            if (histItem.isPromptSecret) {
-                                histItem.prompt = '';
-                                histItem.context = '';
-                            }
+                            // Store history item using Helper
+                            const histItem = createHistoryItem(
+                                nodeId,
+                                currentNodeData.name,
+                                currentNodeData.instruction,
+                                inputs,
+                                result.content,
+                                currentUser,
+                                groups,
+                                currentNodeData.sourceVisibility
+                            );
+
                             // Immediate Save
                             setHistory(h => [histItem, ...h]);
                             setSessionHistory(sh => [histItem, ...sh].slice(0, 24));
@@ -1235,49 +1206,43 @@ export const App = () => {
                     const newItems = [...node.batchItems];
 
                     const promises = newItems.map(async (item, index) => {
-                        // FORCE RE-RUN: Do not skip success items. User clicked Run, so we Run.
-                        // if (item.status === 'success' && item.result) return; // Skip already done
-
                         // Update item status to running
                         newItems[index] = { ...item, status: 'running' };
                         updateNodeData(nodeId, { batchItems: [...newItems] });
 
                         try {
-                            // FIX: Allow image inputs for independent mode (e.g. style reference)
-                            const inputs = inputNodes.map(n => ({ type: n.type, data: n.type === 'image' ? n.inputImage : n.content }));
-                            // Add THIS item as the MAIN image input (or additional input)
-                            inputs.push({ type: 'image', data: item.source });
+                            const inputNodes = incomingConns.map(c => nodes.find(n => n.id === c.from)).filter(n => n) as Node[];
+                            const baseInputs = collectSortedInputs(inputNodes, node, sortNodesSpatially);
 
-                            const result = await runNode(node.instruction || '', node.type, inputs, node.selectedModel, apiKey);
-                            newItems[index] = { ...item, status: 'success', result: result.content };
+                            const { status, result } = await runSingleBatchItem(
+                                item,
+                                baseInputs,
+                                node.instruction || '',
+                                node.type as 'image' | 'batch-image',
+                                node.selectedModel,
+                                apiKey,
+                                { resolution: node.resolution, aspectRatio: node.aspectRatio, googleSearch: node.googleSearch }
+                            );
 
-                            // Save History for Independent Item
-                            if (result.type === 'image') {
-                                const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
-                                const histItem: HistoryItem = {
-                                    id: `hist-${Date.now()}-${nodeId}-${index}`,
-                                    timestamp: new Date(),
-                                    image: result.content,
-                                    prompt: node.instruction || '',
-                                    context,
-                                    nodeName: `${node.name} (Batch ${index + 1})`,
-                                    ownerId: currentUser.id,
-                                    isPromptSecret: (
-                                        (node.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
-                                        (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
-                                    ),
-                                };
-                                if (histItem.isPromptSecret) {
-                                    histItem.prompt = '';
-                                    histItem.context = '';
-                                }
+                            newItems[index] = { ...item, status, result };
+
+                            if (status === 'success' && result) {
+                                // Save History
+                                const itemInputs = [...baseInputs, { type: 'image' as const, data: item.source }];
+                                const histItem = createHistoryItem(
+                                    `${nodeId}-${index}`,
+                                    `${node.name} (Batch ${index + 1})`,
+                                    node.instruction || '',
+                                    itemInputs,
+                                    result,
+                                    currentUser,
+                                    groups,
+                                    node.sourceVisibility
+                                );
                                 setHistory(prev => [histItem, ...prev]);
-                                if (supabaseEnabled) {
-                                    insertHistoryItem(histItem).catch(console.error);
-                                }
+                                if (supabaseEnabled) insertHistoryItem(histItem).catch(console.error);
                                 setSessionHistory(prev => [histItem, ...prev].slice(0, 24));
                             }
-
                         } catch (e) {
                             newItems[index] = { ...item, status: 'error' };
                         }
@@ -1293,32 +1258,8 @@ export const App = () => {
                 // Normal Node Logic
                 const inputNodes = incomingConns.map(c => nodes.find(n => n.id === c.from)).filter(n => n) as Node[];
 
-                // Sort inputs spatially: Top-to-Bottom, then Left-to-Right
-                // Abstracted into helper per user request
-                const sortedInputNodes = sortNodesSpatially(inputNodes);
-
-                const inputs = sortedInputNodes.map(n => ({
-                    type: n.type,
-                    // Downstream: Prefer outputImage (result) if available, otherwise inputImage (source)
-                    data: n.type === 'image' ? (n.outputImage || n.inputImage) : n.content
-                }));
-
-                // Fix: Include the node's own input image (if uploaded/existing) as context for Image-to-Image
-                // CRITIAL: Only use inputImage (Source). NEVER use outputImage (Result) for self-reference.
-                // This prevents the feedback loop where the generated image becomes the input for the next run.
-                // Also, if upstream inputs exist, implies this node is a processor, so we might want to ignore self input?
-                // User requirement: "If no dependency input, uploaded image is initial reference... generated image NOT input for next... if dependency, generated is passed".
-                // Logic:
-                // 1. Upstream inputs -> Use them.
-                // 2. No Upstream inputs -> Use node.inputImage (Source).
-                // 3. Result -> Save to node.outputImage.
-                if (inputs.length === 0 && node.inputImage) {
-                    inputs.push({ type: 'image', data: node.inputImage });
-                } else if (inputs.length > 0 && node.inputImage) {
-                    // Logic check: If I have upstream inputs, do I still attach my own image?
-                    // User says: "If dependency inputs... definitely reference upstream instead of self".
-                    // So we do NOT push node.inputImage here.
-                }
+                // Abstracted Input Collection
+                const inputs = collectSortedInputs(inputNodes, node, sortNodesSpatially);
 
                 const result = await runNode(node.instruction || '', node.type, inputs, node.selectedModel, apiKey, { resolution: node.resolution, aspectRatio: node.aspectRatio });
 
@@ -1327,24 +1268,17 @@ export const App = () => {
                     updateNodeData(nodeId, { status: 'success', outputImage: result.content, content: 'Generated' });
 
                     // Save History for Single Node Execution
-                    const context = inputs.filter(i => i.type === 'text' && i.data).map(i => i.data).join('\n\n');
-                    const histItem: HistoryItem = {
-                        id: `hist-${Date.now()}-${nodeId}`,
-                        timestamp: new Date(),
-                        image: result.content,
-                        prompt: node.instruction || '',
-                        context,
-                        nodeName: node.name,
-                        ownerId: currentUser.id,
-                        isPromptSecret: (
-                            (node.sourceVisibility === 'private' && currentUser.role !== 'admin') ||
-                            (groups.find(g => g.nodeIds.includes(nodeId))?.visibility === 'private' && currentUser.role !== 'admin')
-                        ),
-                    };
-                    if (histItem.isPromptSecret) {
-                        histItem.prompt = '';
-                        histItem.context = '';
-                    }
+                    // Save History for Single Node Execution using Helper
+                    const histItem = createHistoryItem(
+                        nodeId,
+                        node.name,
+                        node.instruction || '',
+                        inputs,
+                        result.content,
+                        currentUser,
+                        groups,
+                        node.sourceVisibility
+                    );
                     setHistory(prev => [histItem, ...prev]);
                     if (supabaseEnabled) {
                         insertHistoryItem(histItem).catch(console.error);
