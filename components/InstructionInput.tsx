@@ -2,6 +2,7 @@ import React, { useState, ChangeEvent, useEffect, useRef } from 'react';
 import type { Node } from '../types';
 import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH } from '../constants';
 import { fileToBase64 } from '../services/geminiService';
+import { handleClipboardPaste } from '../utils/clipboardUtils';
 
 interface InstructionInputProps {
     node: Node;
@@ -61,25 +62,27 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({ node, onData
 
     const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
         if (!isOwner) return;
-        const items = Array.from(e.clipboardData.items);
-        for (const item of items) {
-            if (item.type.startsWith('image/')) {
-                const file = item.getAsFile();
-                if (file) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const base64 = await fileToBase64(file);
-                    // Update inputImage and reset status to idle
-                    // Also clear outputImage to avoid confusion
-                    onDataChange(node.id, {
-                        inputImage: base64,
-                        outputImage: undefined,
-                        status: 'idle',
-                        content: node.type === 'image' ? file.name : node.content // For image node, use filename as content if needed
-                    });
-                    return;
-                }
-            }
+
+        const results = await handleClipboardPaste(e);
+
+        if (results.length > 0) {
+            e.preventDefault();
+            e.stopPropagation();
+        } else {
+            return;
+        }
+
+        const firstImage = results.find(r => r.type === 'image');
+        if (firstImage) {
+            // Update inputImage and reset status to idle
+            // Also clear outputImage to avoid confusion
+            onDataChange(node.id, {
+                inputImage: firstImage.content,
+                outputImage: undefined,
+                status: 'idle',
+                content: node.type === 'image' && firstImage.filename ? firstImage.filename : node.content
+            });
+            return;
         }
     };
 

@@ -1,6 +1,7 @@
 import React, { useState, useRef, MouseEvent, ChangeEvent, useEffect } from 'react';
 import type { Node, NodeType } from '../types';
 import { fileToBase64 } from '../services/geminiService';
+import { handleClipboardPaste } from '../utils/clipboardUtils';
 import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH, MAX_NODE_HEIGHT, MAX_NODE_WIDTH } from '../constants';
 import { BatchNodeComponent } from './BatchNodeComponent';
 
@@ -79,71 +80,42 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
     const handlePaste = async (e: React.ClipboardEvent) => {
         // if (!isOwner || isGenerated) return; // Allow non-owners to paste
         // if (!isOwner || isGenerated) return; // Allow non-owners to paste
-        if (isGenerated && node.type !== 'batch-image') return;
+        if (isGenerated && node.type !== 'batch-image') {
+            alert('Cannot paste into a node with upstream connections. Disconnect first.'); // Simple alert for now, or use a toast callback if available props
+            return;
+        }
+
+        const results = await handleClipboardPaste(e);
+
+        if (results.length > 0) {
+            e.preventDefault();
+            e.stopPropagation();
+        } else {
+            return;
+        }
 
         // Handle Image Node Paste
         if (node.type === 'image') {
-            let handled = false;
-            for (const item of e.clipboardData.items) {
-                if (item.type.startsWith('image/')) {
-                    const file = item.getAsFile();
-                    if (file) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const base64 = await fileToBase64(file);
-                        // IMPORTANT: Reset status to 'idle' so the runner knows this is fresh user input.
-                        // When pasting new input, clear previous outputImage
-                        onDataChange(node.id, { inputImage: base64, outputImage: undefined, content: "pasted_image", status: 'idle', width: undefined, height: undefined });
-                        handled = true;
-                        break; // Stop after finding the first image
-                    }
-                }
-            }
-            if (!handled) {
-                const text = e.clipboardData.getData('text');
-                if (text && (text.startsWith('http') || text.startsWith('data:image'))) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onDataChange(node.id, { inputImage: text, content: "pasted_url", status: 'idle', width: undefined, height: undefined });
+            const firstImage = results.find(r => r.type === 'image');
+            if (firstImage) {
+                onDataChange(node.id, { inputImage: firstImage.content, outputImage: undefined, content: "pasted_image", status: 'idle', width: undefined, height: undefined });
+            } else {
+                const firstText = results.find(r => r.type === 'text');
+                if (firstText) {
+                    onDataChange(node.id, { inputImage: firstText.content, content: "pasted_url", status: 'idle', width: undefined, height: undefined });
                 }
             }
         }
         // Handle Batch Image Node Paste
         else if (node.type === 'batch-image') {
-            e.preventDefault();
-            e.stopPropagation();
-
             const newItems: any[] = [];
-
-            // Priority 1: Check for Files (better for multi-select copy/paste)
-            if (e.clipboardData.files && e.clipboardData.files.length > 0) {
-                const files = Array.from(e.clipboardData.files);
-                for (const file of files) {
-                    if (file.type.startsWith('image/')) {
-                        const base64 = await fileToBase64(file);
-                        newItems.push({
-                            id: `item-${Date.now()}-${Math.random()}`,
-                            source: base64,
-                            status: 'idle'
-                        });
-                    }
-                }
-            }
-            // Priority 2: Check for Items (fallback for some contexts)
-            else {
-                const items = Array.from(e.clipboardData.items);
-                for (const item of items) {
-                    if (item.type.startsWith('image/')) {
-                        const file = item.getAsFile();
-                        if (file) {
-                            const base64 = await fileToBase64(file);
-                            newItems.push({
-                                id: `item-${Date.now()}-${Math.random()}`,
-                                source: base64,
-                                status: 'idle'
-                            });
-                        }
-                    }
+            for (const result of results) {
+                if (result.type === 'image') {
+                    newItems.push({
+                        id: `item-${Date.now()}-${Math.random()}`,
+                        source: result.content,
+                        status: 'idle'
+                    });
                 }
             }
 

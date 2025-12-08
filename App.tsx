@@ -25,6 +25,7 @@ import { useSelection } from './hooks/useSelection';
 import { useCanvasInteraction } from './hooks/useCanvasInteraction';
 import { useAuth } from './hooks/useAuth';
 import { TextIcon, ImageIcon } from './components/Icons';
+import { sortNodesSpatially } from './utils/nodeUtils';
 
 
 
@@ -1291,7 +1292,12 @@ export const App = () => {
             } else {
                 // Normal Node Logic
                 const inputNodes = incomingConns.map(c => nodes.find(n => n.id === c.from)).filter(n => n) as Node[];
-                const inputs = inputNodes.map(n => ({
+
+                // Sort inputs spatially: Top-to-Bottom, then Left-to-Right
+                // Abstracted into helper per user request
+                const sortedInputNodes = sortNodesSpatially(inputNodes);
+
+                const inputs = sortedInputNodes.map(n => ({
                     type: n.type,
                     // Downstream: Prefer outputImage (result) if available, otherwise inputImage (source)
                     data: n.type === 'image' ? (n.outputImage || n.inputImage) : n.content
