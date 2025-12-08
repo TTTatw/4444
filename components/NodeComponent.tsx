@@ -319,6 +319,7 @@ export const NodeComponent: React.FC<NodeProps> = React.memo(({ node, onDataChan
     return (
         <div
             id={node.id}
+            data-is-node="true"
             style={nodeStyle}
             tabIndex={-1} // Allow div to receive focus for paste events
             className={`group/node absolute outline-none pointer-events-auto`}

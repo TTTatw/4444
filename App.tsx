@@ -1771,7 +1771,7 @@ export const App = () => {
             // --- PASTE (Ctrl+V) ---
             if (!isTyping && e.ctrlKey && e.key === 'v') {
                 // If a node is focused, let the node handle the paste (e.g. image paste)
-                if (document.activeElement?.classList.contains('group/node')) {
+                if (document.activeElement?.closest('[data-is-node="true"]')) {
                     return;
                 }
 
